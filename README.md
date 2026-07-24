@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.1  
+**Current version:** 1.5.2  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -62,6 +62,15 @@ Starting with version 1.5.1:
 
 - **Jump Host**: set a profile's "Jump Host" (in the Connection form) to another saved profile to connect through it as a bastion - the app opens the target host through a single hop via the jump host, prompting for the jump host's own saved password the same way it does for any profile.
 - **Session Restore**: when you relaunch the app, if you had tabs open when you last closed it, you'll be asked whether to reopen them (same profiles, panes, and layout). Declining clears the offer so you won't be asked again until you have another session to restore.
+
+---
+
+### File Transfer and Broadcast Typing
+
+Starting with version 1.5.2:
+
+- **File Transfer**: a "File Transfer..." button opens an Upload/Download panel for the focused connection - pick a local file and a remote destination path to upload, or a remote source path and a local save location to download. Runs over `pscp.exe` (bundled alongside `plink.exe`). This is file-picker dialogs, not drag-and-drop.
+- **Broadcast Typing**: a "Broadcast Typing (this tab)" switch sends everything you type in the focused pane to every other pane in the same tab - useful for running the same command across several identical servers at once. Each tab remembers its own on/off state.
 
 ---
 
@@ -172,13 +181,14 @@ Install Python packages:
 pip install pywinpty keyring pyte customtkinter
 ```
 
-Required executable:
+Required executables:
 
 ```text
 plink.exe
+pscp.exe
 ```
 
-Place `plink.exe` in the same folder as the Python script or compiled `.exe`, or install PuTTY and add it to your PATH.
+Place both beside the Python script or compiled `.exe` (or install PuTTY and add it to your PATH). `pscp.exe` is only needed for File Transfer - the app still runs without it, that feature just won't work.
 
 ---
 
@@ -192,7 +202,7 @@ python SSH_Console_Launcher.py
 
 ---
 
-## Building a Portable EXE
+## Building a Portable EXE or Installer
 
 Install build tools:
 
@@ -200,29 +210,27 @@ Install build tools:
 pip install pyinstaller pywinpty keyring pyte customtkinter
 ```
 
-Build:
+With `plink.exe` and `pscp.exe` in the project root, build:
 
 ```powershell
-pyinstaller --onefile --windowed `
-  --add-binary "plink.exe;." `
-  --add-data "README.md;." `
-  --add-data "VERSION_HISTORY.md;." `
-  --add-data "FEATURES_PLAN.md;." `
-  SSH_Console_Launcher.py
+.\build_exe.ps1
 ```
 
-The final executable will be created in:
+The `.exe` lands in `dist\`. To also build the one-click installer (Inno Setup - see [doc/BUILD.md](doc/BUILD.md) for full setup):
 
-```text
-dist\
+```powershell
+"C:\Users\<you>\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-Recommended folder structure:
+Produces `installer_output\SSH-Console-Launcher-Setup-v<version>.exe`.
+
+Recommended portable (no-installer) folder structure:
 
 ```text
 SSHLauncher\
   SSH_Console_Launcher.exe
   plink.exe
+  pscp.exe
 ```
 
 ---
@@ -431,10 +439,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.1
+v1.5.2
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, and v1.5.1's Jump Host support and Session Restore. See `VERSION_HISTORY.md` for details.
+This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, and v1.5.2's File Transfer and Broadcast Typing. See `VERSION_HISTORY.md` for details.
 
 ---
 

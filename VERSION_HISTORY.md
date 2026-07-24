@@ -427,10 +427,23 @@ Support real-world multi-hop infrastructure and reduce "reopen everything by han
 
 ---
 
+## v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+
+### Added
+
+- **File Transfer**: an Upload/Download panel for the focused connection, backed by `pscp.exe` (bundled alongside `plink.exe`). File-picker dialogs (native Windows open/save dialogs), not drag-and-drop - Tkinter has no built-in drag-and-drop support, and this avoids adding a new third-party dependency. Does not route through a profile's Jump Host in this release.
+- **Broadcast Typing**: a per-tab "Broadcast Typing (this tab)" switch relays everything typed in the focused pane to every other pane in the same tab - useful for running one command across several identical servers at once. Each tab has its own independent on/off state.
+
+### Purpose
+
+Cover the two most common "I have to drop to a separate tool for this" gaps: moving a file, and typing the same thing into several servers at once.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.1
+v1.5.2
 ```
 
 ---
@@ -457,3 +470,4 @@ v1.5.1
 | v1.4.2 | Bug-fix and visual-polish pass (dialogs, terminal colors, reconnect race, app icon, installer) |
 | v1.5.0 | Recent Connections, Environment Tags, Import from SSH Config |
 | v1.5.1 | Jump Host / Bastion Support, Session Restore |
+| v1.5.2 | File Transfer (pscp), Broadcast Typing |

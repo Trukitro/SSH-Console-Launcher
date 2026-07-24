@@ -13,6 +13,10 @@ if (-not (Test-Path "plink.exe")) {
     Write-Host "WARNING: plink.exe was not found in this folder. Copy it beside dist\SSH_Console_Launcher.exe after building (or run installer.iss, which does this for you)." -ForegroundColor Yellow
 }
 
+if (-not (Test-Path "pscp.exe")) {
+    Write-Host "WARNING: pscp.exe was not found in this folder. File Transfer won't work without it (see doc/BUILD.md)." -ForegroundColor Yellow
+}
+
 $IconArgs = @()
 if (Test-Path "image\app_icon.ico") {
     $IconArgs = @("--icon", "image\app_icon.ico")

@@ -52,12 +52,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 try:
     import customtkinter as ctk
@@ -80,7 +81,7 @@ except Exception:
     pyte = None
 
 
-APP_NAME = "SSH Console Launcher v1.5.1"
+APP_NAME = "SSH Console Launcher v1.5.2"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
@@ -1895,6 +1896,102 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         return "\n".join(parts[:8])
 
 
+class FileTransferWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
+    """Simple upload/download panel over pscp - file-picker dialogs, not drag-and-drop."""
+
+    def __init__(self, app: "EmbeddedSSHLauncher"):
+        super().__init__(app)
+        self.app = app
+        self.title("File Transfer")
+        center_toplevel(self, app, 520, 260)
+        self.minsize(420, 220)
+        self.transient(app)
+
+        if ctk is not None:
+            self.configure(fg_color=BG)
+
+        self.profile: SSHProfile | None = self.app.get_monitoring_profile()
+
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        if ctk is None:
+            self.text = tk.Text(self)
+            self.text.pack(fill="both", expand=True)
+            self.text.insert("1.0", "File Transfer requires customtkinter for the full UI.\n")
+            return
+
+        frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=16)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            frame, text="File Transfer", text_color=TEXT, font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(16, 4))
+
+        self.profile_label = ctk.CTkLabel(
+            frame, text=self.profile_title(), text_color=MUTED, font=ctk.CTkFont(size=12),
+        )
+        self.profile_label.pack(anchor="w", padx=16, pady=(0, 14))
+
+        button_row = ctk.CTkFrame(frame, fg_color="transparent")
+        button_row.pack(fill="x", padx=16, pady=(0, 10))
+
+        build_button(button_row, "Upload File...", self.start_upload, ACCENT).pack(
+            side="left", fill="x", expand=True, padx=(0, 4)
+        )
+        build_button(button_row, "Download File...", self.start_download, ACCENT).pack(
+            side="left", fill="x", expand=True, padx=(4, 0)
+        )
+
+        self.status_var = tk.StringVar(value="Ready.")
+        ctk.CTkLabel(
+            frame, textvariable=self.status_var, text_color=MUTED, font=ctk.CTkFont(size=12),
+            wraplength=460, justify="left",
+        ).pack(anchor="w", padx=16, pady=(10, 16), fill="x")
+
+    def profile_title(self) -> str:
+        if self.profile is None:
+            return "No profile selected. Select a profile or focus an active SSH console."
+        return f"{self.profile.name} - {self.profile.user}@{self.profile.host}:{self.profile.port}"
+
+    def start_upload(self) -> None:
+        if self.profile is None:
+            show_message(self, "error", APP_NAME, "Select a profile or focus a connected terminal first.")
+            return
+        local_path = filedialog.askopenfilename(parent=self, title="Select file to upload")
+        if not local_path:
+            return
+        default_remote = f"~/{Path(local_path).name}"
+        remote_path = ask_text(self, APP_NAME, "Remote destination path:", initial_value=default_remote)
+        if not remote_path:
+            return
+        self.status_var.set(f"Uploading {Path(local_path).name}...")
+        self.app.run_file_transfer(self.profile, local_path, remote_path, True, self.on_transfer_result)
+
+    def start_download(self) -> None:
+        if self.profile is None:
+            show_message(self, "error", APP_NAME, "Select a profile or focus a connected terminal first.")
+            return
+        remote_path = ask_text(self, APP_NAME, "Remote source path:")
+        if not remote_path:
+            return
+        suggested_name = remote_path.rstrip("/").rsplit("/", 1)[-1] or "download"
+        local_path = filedialog.asksaveasfilename(parent=self, title="Save downloaded file as", initialfile=suggested_name)
+        if not local_path:
+            return
+        self.status_var.set(f"Downloading {suggested_name}...")
+        self.app.run_file_transfer(self.profile, local_path, remote_path, False, self.on_transfer_result)
+
+    def on_transfer_result(self, success: bool, message: str) -> None:
+        if not self.winfo_exists():
+            return
+        if success:
+            self.status_var.set("Transfer completed successfully.")
+        else:
+            self.status_var.set("Transfer failed.")
+            show_message(self, "error", APP_NAME, f"File transfer failed.\n\n{message[:500]}")
+
+
 class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
     def __init__(
         self,
@@ -1913,6 +2010,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.plink_path = plink_path
         self.password = password or ""
         self.proxy_command = proxy_command
+        self.tab_broadcast_hook = None  # set by ConsoleTab.add_console to ConsoleTab.broadcast_raw
 
         if ctk is not None:
             self.apply_env_border()
@@ -2546,6 +2644,10 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             self.alive = False
             self.set_connection_state("disconnected", "Disconnected")
             self.write_local("\n[write failed; session closed]\n")
+            return
+
+        if callable(self.tab_broadcast_hook):
+            self.tab_broadcast_hook(data, self)
 
     def run_command(self, command: str) -> None:
         if not command.strip():
@@ -2710,6 +2812,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.layout_mode = "horizontal"
         self.panes: list[EmbeddedTerminal] = []
         self.active_terminal: EmbeddedTerminal | None = None
+        self.broadcast_enabled = False
 
         # v1.3.8 change:
         # The previous version used one linear ttk.PanedWindow. That made 3 and 4
@@ -2771,6 +2874,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         # why the direct call was added); binding <<TerminalFocused>> to the same
         # callback here would fire it a second time on every focus event.
         terminal.activate_callback = self.set_active_terminal
+        terminal.tab_broadcast_hook = self.broadcast_raw
 
         self.panes.append(terminal)
         self.apply_layout()
@@ -2778,6 +2882,22 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.set_active_terminal(terminal)
         terminal.focus_terminal()
         self.app.record_recent_connection(profile.name)
+
+    def broadcast_raw(self, data: str, source: "EmbeddedTerminal") -> None:
+        """Relay a keystroke to every other pane in this tab, if broadcast is on.
+
+        Writes straight to each pane's pty (`pane.proc.write`), never through
+        `pane.send()` - that's what keeps this from becoming a rebroadcast loop.
+        """
+        if not self.broadcast_enabled:
+            return
+        for pane in self.panes:
+            if pane is source or not pane.alive or pane.proc is None:
+                continue
+            try:
+                pane.proc.write(data)
+            except Exception:
+                pass
 
     def resolve_proxy_command(self, profile: SSHProfile, plink_path: str) -> tuple[str | None, bool]:
         """Resolve `profile.jump_profile_name` into a plink -proxycmd string.
@@ -3424,6 +3544,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.open_panel, "Open 2 Split", lambda: self.open_n_split(2), CARD_HOVER)
         self._side_button(self.open_panel, "Open 3 Split", lambda: self.open_n_split(3), CARD_HOVER)
         self._side_button(self.open_panel, "Open 4 Split", lambda: self.open_n_split(4), CARD_HOVER)
+        self._side_button(self.open_panel, "File Transfer...", self.open_file_transfer_window, CARD_HOVER)
 
         self._sidebar_title("Layout / Session")
 
@@ -3445,6 +3566,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.session_panel, "Clear Console", self.clear_focused_console, CARD_HOVER)
         self._side_button(self.session_panel, "Close Selected Console", self.close_active_console, DANGER)
         self._side_button(self.session_panel, "Close Current Tab", self.close_current_tab, DANGER)
+
+        self.broadcast_var = tk.BooleanVar(value=False)
+        if ctk is not None:
+            ctk.CTkSwitch(
+                self.session_panel, text="Broadcast Typing (this tab)", variable=self.broadcast_var,
+                command=self.toggle_broadcast_typing, text_color=TEXT,
+            ).pack(anchor="w", padx=10, pady=(8, 10))
 
         self._sidebar_title("Quick Commands")
 
@@ -4443,6 +4571,20 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             elif tab.panes:
                 tab.set_active_terminal(tab.panes[-1])
 
+        # Keep the Broadcast Typing switch in sync with whichever tab is now
+        # active - each tab has its own independent on/off state.
+        if hasattr(self, "broadcast_var"):
+            self.broadcast_var.set(tab.broadcast_enabled if tab is not None else False)
+
+    def toggle_broadcast_typing(self) -> None:
+        tab = self.current_tab()
+        if tab is None:
+            self.broadcast_var.set(False)
+            return
+        tab.broadcast_enabled = self.broadcast_var.get()
+        state = "enabled" if tab.broadcast_enabled else "disabled"
+        self.status_var.set(f"Broadcast typing {state} for this tab")
+
     def on_notebook_double_click(self, event: tk.Event) -> None:
         # A double-click on/near the x close zone must never trigger a rename.
         # Without this guard, the first click's deferred close (see
@@ -4573,6 +4715,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             self.monitoring_dashboard = None
             show_message(self, "error", APP_NAME, f"Could not open monitoring dashboard.\n\n{exc}")
 
+    def open_file_transfer_window(self) -> None:
+        try:
+            FileTransferWindow(self)
+            self.status_var.set("Opened file transfer window")
+        except Exception as exc:
+            show_message(self, "error", APP_NAME, f"Could not open file transfer window.\n\n{exc}")
+
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:
             return self.focused_terminal.profile
@@ -4684,6 +4833,66 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             return str(local)
 
         return shutil.which("plink.exe") or shutil.which("plink")
+
+    def run_file_transfer(
+        self, profile: SSHProfile, local_path: str, remote_path: str, upload: bool, callback,
+    ) -> None:
+        pscp_path = self.find_pscp()
+        if not pscp_path:
+            self.after(0, lambda: callback(False, "pscp.exe was not found. Place it beside this app."))
+            return
+
+        password = PasswordStore.get(profile.name)
+        if password is None:
+            password = ask_text(self, APP_NAME, f"Password for {profile.user}@{profile.host}", password=True)
+            if password is None:
+                self.after(0, lambda: callback(False, "Password was not provided."))
+                return
+            try:
+                PasswordStore.save(profile.name, password)
+            except Exception as exc:
+                self.warn_keyring_failure_once(exc)
+
+        remote_spec = f"{profile.user}@{profile.host}:{remote_path}"
+        source, target = (local_path, remote_spec) if upload else (remote_spec, local_path)
+
+        def worker() -> None:
+            # pscp has no inline -pw flag (unlike plink) - only -pwfile, so the
+            # password has to go through a short-lived temp file, deleted in
+            # `finally` regardless of how the transfer ends.
+            pwfile_fd, pwfile_path = tempfile.mkstemp(prefix="sshcl_pw_")
+            try:
+                with os.fdopen(pwfile_fd, "w", encoding="utf-8") as f:
+                    f.write(password)
+                args = [pscp_path, "-pwfile", pwfile_path, "-P", str(profile.port), "-batch", source, target]
+                result = subprocess.run(args, capture_output=True, text=True, timeout=300, shell=False)
+                success = result.returncode == 0
+                message = "" if success else (result.stderr or result.stdout or "Transfer failed.")
+                self.after(0, lambda: callback(success, message))
+            except subprocess.TimeoutExpired:
+                self.after(0, lambda: callback(False, "Transfer timed out."))
+            except Exception as exc:
+                self.after(0, lambda: callback(False, str(exc)))
+            finally:
+                try:
+                    os.remove(pwfile_path)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def find_pscp(self) -> str | None:
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parent
+
+        local = base / "pscp.exe"
+
+        if local.exists():
+            return str(local)
+
+        return shutil.which("pscp.exe") or shutil.which("pscp")
 
     def check_requirements(self) -> None:
         customtkinter_status = "Found" if ctk is not None else "Missing"

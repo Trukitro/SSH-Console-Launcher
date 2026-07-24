@@ -6,12 +6,13 @@
 ;   1. powershell -File build_exe.ps1      -> produces dist\SSH_Console_Launcher.exe
 ;   2. ISCC.exe installer.iss              -> produces installer_output\SSH-Console-Launcher-Setup-<version>.exe
 ;
-; plink.exe must be present in this folder before compiling (see README.md /
-; doc/BUILD.md) - it ships as a loose sibling file next to the installed exe,
-; not bundled inside it (see the note in build_exe.ps1 for why).
+; plink.exe and pscp.exe must both be present in this folder before compiling
+; (see README.md / doc/BUILD.md) - they ship as loose sibling files next to
+; the installed exe, not bundled inside it (see the note in build_exe.ps1 for
+; why plink.exe works this way; pscp.exe follows the same pattern).
 
 #define MyAppName "SSH Console Launcher"
-#define MyAppVersion "1.5.1"
+#define MyAppVersion "1.5.2"
 #define MyAppPublisher "Ricardo Velez"
 #define MyAppURL "https://github.com/Trukitro/SSH-Console-Launcher"
 #define MyAppExeName "SSH_Console_Launcher.exe"
@@ -47,6 +48,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [Files]
 Source: "dist\SSH_Console_Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "plink.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "pscp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "VERSION_HISTORY.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "FEATURES_PLAN.md"; DestDir: "{app}"; Flags: ignoreversion

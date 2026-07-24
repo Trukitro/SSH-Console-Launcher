@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.1  
+**Current stable version:** v1.5.2  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -31,6 +31,7 @@ The app currently supports:
 - Dark-themed dialogs throughout, resizable sidebar, application icon
 - Recent connections list, per-profile environment tags (prod/staging/dev), SSH config import
 - Jump host / bastion support, session restore on launch
+- File transfer (pscp), per-tab broadcast typing
 
 ---
 
@@ -184,16 +185,16 @@ Support real-world multi-hop infrastructure and reduce "reopen everything by han
 
 ---
 
-## v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+## v1.5.2 - Core SSH: File Transfer & Multi-Pane Input ✅ Implemented
 
 ### Goal
 
 Cover the two most common "I have to drop to a separate tool for this" gaps.
 
-### Planned Features
+### Implemented
 
-- **SFTP panel**: a simple file browser backed by `pscp`/`psftp` for drag-and-drop upload/download against the focused profile's connection - not a full dual-pane file manager, just enough to move a file without leaving the app.
-- **Broadcast typing**: a toggle that sends keystrokes typed in the focused pane to all panes in the current tab (or a selected subset) simultaneously - useful for running the same interactive command across several identical servers.
+- **File Transfer**: an Upload/Download panel backed by `pscp.exe` for the focused profile's connection - file-picker dialogs (native open/save dialogs), not drag-and-drop (Tkinter has no built-in DnD, and this avoids a new dependency). Not routed through a profile's Jump Host in this release.
+- **Broadcast typing**: a per-tab switch that sends keystrokes typed in the focused pane to all other panes in the current tab.
 
 ---
 
@@ -276,14 +277,13 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0, v1.5.1 implemented):
+Recommended next development order (v1.5.0, v1.5.1, v1.5.2 implemented):
 
-1. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
-2. v1.5.3 - Monitoring: History & Multi-Server View
-3. v1.5.4 - Monitoring: Alerts & Generalization
-4. v1.5.5 - Security Hardening
-5. v1.6.1 - Distribution & Release Automation
-6. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.3 - Monitoring: History & Multi-Server View
+2. v1.5.4 - Monitoring: Alerts & Generalization
+3. v1.5.5 - Security Hardening
+4. v1.6.1 - Distribution & Release Automation
+5. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 
