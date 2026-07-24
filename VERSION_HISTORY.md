@@ -370,10 +370,39 @@ Help detect early warning signs before the web server reaches a state where user
 
 ---
 
+## v1.4.2 - Bug-Fix and Visual-Polish Pass
+
+### Fixed
+
+- Escape and Ctrl-chord keystrokes (readline shortcuts, vim insert-mode exit) were silently dropped in embedded terminals.
+- A reconnect race condition could leave a stale reader thread writing garbled output or a false "disconnected" status right after a successful reconnect.
+- The Monitoring Dashboard could be opened multiple times at once, and its auto-refresh timer kept firing after the window was closed.
+- Two profiles with the same name silently shared (and could overwrite) one keyring password entry.
+- Editing a profile's name/host/port didn't update already-open terminal panes for that profile.
+- A persistently failing keyring backend could re-prompt for a password on every monitoring auto-refresh tick instead of warning once.
+- Double-clicking a tab's close (`×`) zone could open the rename dialog on the wrong tab.
+- ANSI background colors reused the brightened foreground palette, rendering "black" backgrounds as near-white.
+- Low-contrast terminal text collapsed to flat white/gray instead of keeping its color-coded meaning.
+- Most sidebar/toolbar buttons had no visible hover feedback due to a copy-pasted hover-color bug.
+
+### Added
+
+- Dark-themed replacement for all native `messagebox` popups (info/warning/error/confirm), matching the rest of the UI.
+- Resizable sidebar with a draggable sash; the width is now remembered between sessions.
+- Monitoring Dashboard's card grid now adapts its column count to the window width.
+- Application icon and taskbar icon.
+- Developer documentation set under `doc/` (architecture, configuration, build, and a generated codebase knowledge graph).
+
+### Purpose
+
+Stability and polish pass with no new user-facing features: fix the bugs and visual inconsistencies found during a full review of the codebase, without changing the app's workflow.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.4.1
+v1.4.2
 ```
 
 ---
@@ -397,3 +426,4 @@ v1.4.1
 | v1.3.9 | Layout Manager controls for 2, 3, and 4 pane layouts |
 | v1.4.0 | Web2py Monitoring Dashboard |
 | v1.4.1 | Web Host Monitoring Dashboard upgrade |
+| v1.4.2 | Bug-fix and visual-polish pass (dialogs, terminal colors, reconnect race, app icon) |

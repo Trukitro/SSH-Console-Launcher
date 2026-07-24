@@ -80,7 +80,7 @@ except Exception:
     pyte = None
 
 
-APP_NAME = "SSH Console Launcher v1.4.1"
+APP_NAME = "SSH Console Launcher v1.4.2"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
