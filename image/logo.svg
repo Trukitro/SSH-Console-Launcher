@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 256" width="1000" height="256">
+  <defs>
+    <style>
+      .title { 
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; 
+        font-size: 85px; 
+        font-weight: 700; 
+        fill: #FFFFFF; 
+      }
+      .subtitle { 
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; 
+        font-size: 65px; 
+        font-weight: 300; 
+        fill: #A0AEC0; 
+      }
+    </style>
+    <filter id="neon-glow-logo" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Grupo que contiene el icono escalado -->
+  <g transform="translate(16, 16) scale(0.4375)">
+    <rect x="16" y="16" width="480" height="480" rx="110" ry="110" fill="#0B1B3D" />
+    <rect x="96" y="96" width="320" height="320" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.8" rx="8" ry="8" />
+    <line x1="256" y1="96" x2="256" y2="416" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.8" />
+    <line x1="96" y1="256" x2="416" y2="256" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.8" />
+    <g filter="url(#neon-glow-logo)">
+      <polyline points="170,210 230,260 170,310" fill="none" stroke="#39FF14" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
+      <line x1="250" y1="310" x2="340" y2="310" stroke="#39FF14" stroke-width="24" stroke-linecap="round" />
+    </g>
+  </g>
+
+  <!-- Texto del Logotipo -->
+  <text x="280" y="115" class="title">SSH Console</text>
+  <text x="280" y="200" class="subtitle">Launcher</text>
+</svg>
