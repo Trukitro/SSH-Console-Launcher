@@ -27,6 +27,8 @@ The app currently supports:
 - Built-in documentation viewer
 - README and VERSION_HISTORY Markdown files
 - PyInstaller packaging support
+- Windows installer wizard (Inno Setup, per-user install)
+- Dark-themed dialogs throughout, resizable sidebar, application icon
 
 ---
 
@@ -129,255 +131,120 @@ Improve the dashboard so it can identify web host instability, overloaded worker
 
 ---
 
-## v1.4.2 - Monitoring Alerts and Threshold Settings
-
-### Goal
-
-Make the Monitoring Dashboard more actionable by adding configurable thresholds and clearer warnings.
-
-### Planned Features
-
-- Configurable warning and critical thresholds.
-- CPU/load thresholds.
-- RAM thresholds.
-- Disk thresholds.
-- Recent error thresholds.
-- Visual alert banner.
-- Optional popup notification for critical states.
-
----
-
-## v1.4.2 - Command Groups
-
-### Goal
-
-Organize Quick Commands into categories instead of one long list.
-
-### Planned Groups
-
-- Monitoring
-- Web2py
-- Logs
-- Services
-- Database
-- Docker
-- Custom
-
-### Planned Features
-
-- Add command group selector.
-- Save command groups to `commands.json`.
-- Let each command belong to a group.
-- Filter visible quick commands by selected group.
-- Add group management:
-  - Add group
-  - Rename group
-  - Delete group
-
----
-
-## v1.4.3 - Run Command on Multiple Panes
-
-### Goal
-
-Allow commands to be executed across multiple terminals.
-
-### Planned Features
-
-Run command on:
-
-- Focused terminal only
-- All panes in current tab
-- All tabs
-- Selected panes only
-
-### Safety Options
-
-- Confirm before running on multiple panes.
-- Highlight target panes before sending command.
-- Add a setting for command execution mode:
-  - Run immediately
-  - Paste only
-  - Ask before run
-
----
-
-## v1.4.4 - Auto Layout per Profile
-
-### Goal
-
-Allow a saved SSH profile to automatically open with a predefined layout.
-
-### Planned Features
-
-Profile settings:
-
-- Default layout:
-  - 1 pane
-  - 2 panes
-  - 3 panes
-  - 4 panes
-- Default commands per pane.
-- Open profile and automatically run:
-  - `htop`
-  - `tail -f web2py.log`
-  - `sudo uwsgitop /tmp/stats.socket`
-  - custom commands
-
-### Example
-
-A profile could open 4 panes automatically:
-
-| Pane | Command |
-|---|---|
-| Top left | `htop` |
-| Top right | `tail -f web2py.log` |
-| Bottom left | `sudo uwsgitop /tmp/stats.socket` |
-| Bottom right | shell prompt |
-
----
-
-## v1.4.5 - Auto Reconnect
-
-### Goal
-
-Reconnect dropped SSH sessions automatically or semi-automatically.
-
-### Planned Features
-
-- Per-profile auto reconnect setting.
-- Global auto reconnect setting.
-- Retry interval setting.
-- Max retry count.
-- Visual retry counter.
-- Status messages:
-  - Disconnected
-  - Reconnecting
-  - Retry failed
-  - Reconnected
-
-### Safety
-
-Auto reconnect should be optional because some commands may not resume safely.
-
----
-
-## v1.4.6 - Export / Import
-
-### Goal
-
-Make it easy to move settings between PCs.
-
-### Planned Features
-
-Export:
-
-- Profiles without passwords
-- Profiles with encrypted backup option
-- Commands
-- Layouts
-- App settings
-
-Import:
-
-- Merge with existing config
-- Replace existing config
-- Preview import before applying
-
-### Files
-
-Possible export format:
-
-```text
-ssh_launcher_backup.json
-```
-
----
-
-## v1.5.0 - SSH Key Support
-
-### Goal
-
-Support safer authentication through SSH keys.
-
-### Planned Features
-
-- Add key file field to profile.
-- Support `.ppk` for PuTTY/plink.
-- Support OpenSSH private key if using Windows OpenSSH later.
-- Support passphrase prompt.
-- Allow password or key auth per profile.
-
-### Benefits
-
-- Better security.
-- Faster login.
-- Less reliance on saved passwords.
-
----
-
-## v1.5.1 - Session Logging
-
-### Goal
-
-Allow terminal output to be saved locally.
-
-### Planned Features
-
-- Enable/disable logging per terminal.
-- Save logs by date/profile/tab.
-- Add log folder shortcut.
-- Add log retention setting.
-- Optional command history file.
-
-### Example Path
-
-```text
-%APPDATA%\EmbeddedSSHLauncher\logs\
-```
-
----
-
-## v1.5.2 - Terminal Search
-
-### Goal
-
-Search inside terminal output.
-
-### Planned Features
-
-- Search text in focused terminal.
-- Highlight matches.
-- Next / previous result.
-- Case-sensitive toggle.
-- Regex toggle.
-
----
-
-## v1.6.0 - Packaged Windows App / Installer
+## v1.6.0 - Packaged Windows App / Installer ✅ Implemented
 
 ### Goal
 
 Make deployment easier.
 
+### Implemented
+
+- One-click build script (`build_exe.ps1`).
+- `plink.exe` shipped as a sibling file (not `--add-binary` - see note below).
+- README/VERSION_HISTORY/FEATURES_PLAN bundled into the `.exe`.
+- App icon (window/taskbar).
+- Inno Setup wizard (`installer.iss`): per-user install (no admin/UAC), Start Menu shortcut, optional desktop shortcut, uninstaller.
+
+### Note
+
+`find_plink()` only checks beside the running `.exe` or system `PATH` - it does not check PyInstaller's `_MEIPASS` temp dir. So `plink.exe` must ship as a loose file next to `SSH_Console_Launcher.exe` (which `installer.iss` does), not via `--add-binary`.
+
+---
+
+# Roadmap (prioritized 2026-07-24)
+
+The sections below are the user's top picks from a features brainstorm, grouped into shippable releases. Numbering restarts clean at v1.5.0 (the old v1.4.2-v1.4.6 slot had duplicate/collided version numbers from earlier planning - abandoned in favor of this list).
+
+## v1.5.0 - Profile & Credential Improvements
+
+### Goal
+
+Make managing many profiles faster and safer to navigate.
+
 ### Planned Features
 
-- One-click build script.
-- Include `plink.exe`.
-- Include README and VERSION_HISTORY.
-- Include app icon.
-- Create Start Menu shortcut.
-- Optional installer using Inno Setup or NSIS.
+- **Import from `~/.ssh/config`**: parse `Host`/`HostName`/`User`/`Port`/`IdentityFile` blocks and offer them as importable profiles (preview + select which to import, skip duplicates by name).
+- **Recent connections history**: a short "Recently opened" list (last N profiles opened, most-recent-first) above or alongside the saved profile list for one-click reopen.
+- **Environment color-coding**: a per-profile color tag (e.g. prod=red, staging=yellow, dev=green) shown on the profile button and the terminal pane header/border, so it's visually obvious which environment a pane is connected to before running a command.
 
-### Recommended Build Command
+---
 
-```powershell
-pyinstaller --onefile --windowed `
-  --add-binary "plink.exe;." `
-  --add-data "README_Embedded_SSH_Launcher.md;." `
-  --add-data "VERSION_HISTORY_Embedded_SSH_Launcher.md;." `
-  SSH_Console_Launcher_v1_3_8.py
-```
+## v1.5.1 - Core SSH: Bastion & Session Restore
+
+### Goal
+
+Support real-world multi-hop infrastructure and reduce "reopen everything by hand" friction.
+
+### Planned Features
+
+- **Jump host / bastion support**: a "Jump host" field on the profile (or a separate jump-host profile reference) that runs the connection through `plink -J`-style double hop (plink itself doesn't support `-J`; implement via `-proxycmd "plink -batch -pw ... jumpuser@jumphost -nc %host:%port"` or an equivalent proxy-command chain).
+- **Session restore on launch**: remember the last open tabs/panes/profiles (and layout) and offer to reopen them on next start (prompt, don't auto-reconnect silently - passwords may need re-entry).
+
+---
+
+## v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+
+### Goal
+
+Cover the two most common "I have to drop to a separate tool for this" gaps.
+
+### Planned Features
+
+- **SFTP panel**: a simple file browser backed by `pscp`/`psftp` for drag-and-drop upload/download against the focused profile's connection - not a full dual-pane file manager, just enough to move a file without leaving the app.
+- **Broadcast typing**: a toggle that sends keystrokes typed in the focused pane to all panes in the current tab (or a selected subset) simultaneously - useful for running the same interactive command across several identical servers.
+
+---
+
+## v1.5.3 - Monitoring: History & Multi-Server View
+
+### Goal
+
+Turn the Monitoring Dashboard from a point-in-time snapshot into something you'd actually keep open.
+
+### Planned Features
+
+- **Local metrics history**: persist each health-check run's key numbers (load, RAM%, disk%, connections) to a small local store and render sparklines on the relevant cards instead of just the latest value.
+- **Multi-server grid**: a mode that runs the health check against several saved profiles at once and shows one compact card per server, instead of only the currently-focused profile.
+
+---
+
+## v1.5.4 - Monitoring: Alerts & Generalization
+
+### Goal
+
+Make the dashboard proactive instead of something you have to remember to check, and usable beyond the Web2py/uWSGI/Nginx stack it was built for.
+
+### Planned Features
+
+- **Desktop/sound notification on critical**: fire a Windows toast notification (and/or a sound) when the Overall Web Host Risk (or any card) crosses into critical, even if the dashboard window isn't focused.
+- **Generalized health-check**: let a profile specify its own health-check script/command instead of the hardcoded Web2py/uWSGI/Nginx `MONITORING_HEALTH_COMMAND`, so the dashboard is useful for Docker, Kubernetes, or any other stack. Keep the current script as the default for backward compatibility.
+
+---
+
+## v1.5.5 - Security Hardening
+
+### Goal
+
+Reduce the blast radius of a shared or unattended PC.
+
+### Planned Features
+
+- **Clipboard auto-clear**: after a password is copied/pasted through the app's own dialogs, clear the clipboard after a short delay (only if it still contains that same value, to avoid clobbering something else the user copied since).
+- **Connection audit log**: a local, append-only log of `(timestamp, profile name, host, user)` for every connection opened - useful on a shared machine to answer "who connected to what, and when."
+
+---
+
+## v1.6.1 - Distribution & Release Automation
+
+### Goal
+
+Make future releases (and getting the app onto other people's machines) less manual.
+
+### Planned Features
+
+- **Auto-update checker**: on startup (or on demand), check the GitHub Releases API for a newer tag than the running version and show a non-blocking notice with a link.
+- **GitHub Actions CI**: a workflow that builds `dist\SSH_Console_Launcher.exe` and compiles `installer.iss` automatically on every version tag push, uploading the installer as a release asset - removes the need to build locally for every release.
+- **winget/Chocolatey package**: publish a package manifest so `winget install` (or `choco install`) works, once there are a couple of stable tagged releases to point at.
 
 ---
 
@@ -409,32 +276,41 @@ This is a larger architecture change and should be considered after the current 
 
 Recommended next development order:
 
-1. v1.4.1 - Monitoring Alerts and Threshold Settings
-2. v1.4.2 - Command Groups
-3. v1.4.3 - Run Command on Multiple Panes
-4. v1.4.4 - Auto Layout per Profile
-5. v1.4.5 - Auto Reconnect
-6. v1.4.6 - Export / Import
-7. v1.5.0 - SSH Key Support
-8. v1.6.0 - Packaged Installer
-9. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.0 - Profile & Credential Improvements
+2. v1.5.1 - Core SSH: Bastion & Session Restore
+3. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+4. v1.5.3 - Monitoring: History & Multi-Server View
+5. v1.5.4 - Monitoring: Alerts & Generalization
+6. v1.5.5 - Security Hardening
+7. v1.6.1 - Distribution & Release Automation
+8. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 
 # Backlog Ideas
+
+Lower priority than the roadmap above, or not yet scoped into a specific release:
 
 - App settings page.
 - Theme selector.
 - Font size selector.
 - Terminal font selector.
 - Save window size and position.
-- Save last opened tabs.
 - Confirm before closing active sessions.
-- Add keyboard shortcuts.
-- Add command search.
 - Add profile search.
-- Add profile folders/groups.
 - Add environment variables per profile.
 - Add per-profile notes.
 - Add documentation search improvements.
-- Add update checker if published in Git.
+- Command palette (fuzzy launcher for profiles/commands/actions).
+- Highlight ERROR/WARN lines automatically in terminal output.
+- "Workspaces": named, reopenable sets of tabs + panes + commands.
+- Notification when a long-running command finishes.
+- Command groups (organize Quick Commands into categories).
+- Run a command on multiple panes/tabs at once.
+- Per-profile default layout + auto-run commands on open.
+- Per-profile / global auto-reconnect on dropped connections.
+- Export/import profiles (with or without passwords) and commands between PCs.
+- SSH key authentication (`.ppk` / OpenSSH keys) as an alternative to saved passwords.
+- Local session logging (save terminal output to disk).
+- Search inside terminal output.
+- Configurable Monitoring Dashboard warning/critical thresholds.
