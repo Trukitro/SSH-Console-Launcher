@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.0  
+**Current version:** 1.5.1  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -53,6 +53,15 @@ Starting with version 1.5.0:
 - **Recent**: the sidebar shows the last profiles you opened, most-recent-first, for one-click reopen.
 - **Environment tags**: mark a profile as Production, Staging, or Development from the Connection form. The tag shows as a colored border on the profile button and on any open terminal pane for that profile - red/amber/green, so it's obvious at a glance which environment a pane is talking to.
 - **Import from SSH Config**: bulk-import `Host` entries from your existing `~/.ssh/config` as profiles (host/user/port only - password is entered on first connect, same as a manually-created profile).
+
+---
+
+### Jump Host and Session Restore
+
+Starting with version 1.5.1:
+
+- **Jump Host**: set a profile's "Jump Host" (in the Connection form) to another saved profile to connect through it as a bastion - the app opens the target host through a single hop via the jump host, prompting for the jump host's own saved password the same way it does for any profile.
+- **Session Restore**: when you relaunch the app, if you had tabs open when you last closed it, you'll be asked whether to reopen them (same profiles, panes, and layout). Declining clears the offer so you won't be asked again until you have another session to restore.
 
 ---
 
@@ -422,10 +431,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.0
+v1.5.1
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, and v1.5.0's Recent Connections, Environment Tags, and SSH Config Import. See `VERSION_HISTORY.md` for details.
+This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, and v1.5.1's Jump Host support and Session Restore. See `VERSION_HISTORY.md` for details.
 
 ---
 

@@ -80,7 +80,7 @@ except Exception:
     pyte = None
 
 
-APP_NAME = "SSH Console Launcher v1.5.0"
+APP_NAME = "SSH Console Launcher v1.5.1"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
@@ -88,6 +88,7 @@ COMMANDS_FILE = CONFIG_DIR / "commands.json"
 UI_STATE_FILE = CONFIG_DIR / "ui_state.json"
 RECENT_FILE = CONFIG_DIR / "recent.json"
 MAX_RECENT = 8
+SESSION_FILE = CONFIG_DIR / "session.json"
 DEFAULT_SIDEBAR_WIDTH = 320
 MIN_SIDEBAR_WIDTH = 240
 MAX_SIDEBAR_WIDTH = 560
@@ -604,6 +605,7 @@ class SSHProfile:
     user: str
     port: int = 22
     env_color: str = ""  # "" / "prod" / "staging" / "dev" - see ENV_TAGS
+    jump_profile_name: str = ""  # "" = direct connection; otherwise another profile's .name
 
 
 @dataclass
@@ -738,6 +740,35 @@ class RecentStore:
     def remove(name: str) -> list[str]:
         names = [n for n in RecentStore.load() if n != name]
         return RecentStore._write(names)
+
+
+class SessionStore:
+    """Persisted snapshot of open tabs/panes/layout, offered back on next launch."""
+
+    @staticmethod
+    def load() -> list[dict]:
+        if not SESSION_FILE.exists():
+            return []
+        try:
+            raw = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, list) else []
+        except Exception:
+            return []
+
+    @staticmethod
+    def save(tabs: list[dict]) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            SESSION_FILE.write_text(json.dumps(tabs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    @staticmethod
+    def clear() -> None:
+        try:
+            SESSION_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 class PasswordStore:
@@ -1871,6 +1902,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         profile: SSHProfile,
         plink_path: str,
         password: str | None,
+        proxy_command: str | None = None,
     ):
         if ctk is not None:
             super().__init__(master, fg_color=TERMINAL_BG, corner_radius=12)
@@ -1880,6 +1912,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.profile = profile
         self.plink_path = plink_path
         self.password = password or ""
+        self.proxy_command = proxy_command
 
         if ctk is not None:
             self.apply_env_border()
@@ -2142,6 +2175,9 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             "-t",
             "-no-antispoof",
         ]
+
+        if self.proxy_command:
+            command.extend(["-proxycmd", self.proxy_command])
 
         if self.password:
             command.extend(["-pw", self.password])
@@ -2725,7 +2761,11 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
             except Exception as exc:
                 self.app.warn_keyring_failure_once(exc)
 
-        terminal = EmbeddedTerminal(self.layout_frame, profile, plink_path, password)
+        proxy_command, ok = self.resolve_proxy_command(profile, plink_path)
+        if not ok:
+            return
+
+        terminal = EmbeddedTerminal(self.layout_frame, profile, plink_path, password, proxy_command=proxy_command)
         terminal.close_callback = self.close_console
         # focus_terminal() already invokes this directly (see its own comment on
         # why the direct call was added); binding <<TerminalFocused>> to the same
@@ -2738,6 +2778,43 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.set_active_terminal(terminal)
         terminal.focus_terminal()
         self.app.record_recent_connection(profile.name)
+
+    def resolve_proxy_command(self, profile: SSHProfile, plink_path: str) -> tuple[str | None, bool]:
+        """Resolve `profile.jump_profile_name` into a plink -proxycmd string.
+
+        Returns (proxy_command, ok). (None, True) means "no jump host, connect
+        directly". (None, False) means resolution failed or the user cancelled
+        a password prompt - the caller should abort the connection attempt
+        rather than silently falling back to a direct connection.
+        """
+        if not profile.jump_profile_name:
+            return None, True
+
+        jump_profile = next((p for p in self.app.profiles if p.name == profile.jump_profile_name), None)
+        if jump_profile is None:
+            show_message(
+                self, "error", APP_NAME,
+                f"Jump host profile '{profile.jump_profile_name}' no longer exists.",
+            )
+            return None, False
+
+        jump_password = PasswordStore.get(jump_profile.name)
+        if jump_password is None:
+            jump_password = ask_text(
+                self, APP_NAME, f"Password for jump host {jump_profile.user}@{jump_profile.host}", password=True,
+            )
+            if jump_password is None:
+                return None, False
+            try:
+                PasswordStore.save(jump_profile.name, jump_password)
+            except Exception as exc:
+                self.app.warn_keyring_failure_once(exc)
+
+        proxy_command = (
+            f'"{plink_path}" -batch -pw "{jump_password}" '
+            f"{jump_profile.user}@{jump_profile.host} -P {jump_profile.port} -nc %host:%port"
+        )
+        return proxy_command, True
 
     def set_active_terminal(self, terminal: EmbeddedTerminal) -> None:
         if self.active_terminal is not None and self.active_terminal is not terminal:
@@ -3051,6 +3128,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.refresh_recent()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.maybe_restore_session()
 
     def apply_app_icon(self) -> None:
         """Set the window/taskbar icon. Safe no-op if the asset isn't found."""
@@ -3293,6 +3371,26 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 self.env_swatch_buttons[tag] = button
 
             self.set_env_color_selection("")
+
+        self.jump_host_var = tk.StringVar(value="None")
+
+        if ctk is not None:
+            ctk.CTkLabel(
+                self.profile_form,
+                text="Jump Host (optional)",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+
+            self.jump_host_menu = ctk.CTkOptionMenu(
+                self.profile_form,
+                variable=self.jump_host_var,
+                values=["None"],
+                fg_color=PANEL,
+                button_color=CARD_HOVER,
+                button_hover_color=CARD_HOVER_2,
+            )
+            self.jump_host_menu.pack(fill="x", padx=12, pady=(0, 2))
 
         if ctk is not None:
             row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
@@ -3587,6 +3685,17 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 button.pack(fill="x")
                 self.profile_buttons.append(button)
 
+        self.refresh_jump_host_options()
+
+    def refresh_jump_host_options(self, exclude_name: str | None = None) -> None:
+        if ctk is None or not hasattr(self, "jump_host_menu"):
+            return
+        names = [p.name for p in self.profiles if p.name != exclude_name]
+        values = ["None"] + names
+        self.jump_host_menu.configure(values=values)
+        if self.jump_host_var.get() not in values:
+            self.jump_host_var.set("None")
+
     def refresh_recent(self) -> None:
         for widget in self.recent_buttons_frame.winfo_children():
             widget.destroy()
@@ -3650,6 +3759,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.port_var.set(str(profile.port))
         self.password_var.set("")
         self.set_env_color_selection(profile.env_color)
+        self.refresh_jump_host_options(exclude_name=profile.name)
+        self.jump_host_var.set(profile.jump_profile_name or "None")
 
         for idx, button in enumerate(self.profile_buttons):
             if ctk is not None:
@@ -3801,13 +3912,23 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             )
             return
 
+        jump_profile_name = self.jump_host_var.get()
+        if jump_profile_name == "None":
+            jump_profile_name = ""
+        if jump_profile_name and jump_profile_name.strip().lower() == name.strip().lower():
+            show_message(self, "error", APP_NAME, "A profile can't be its own jump host.")
+            return
+
         old_name = None
         env_color = self.env_color_var.get()
         if env_color not in ENV_TAGS:
             env_color = ""
 
         if self.selected_profile_index is None:
-            profile = SSHProfile(name=name, host=host, user=user, port=port, env_color=env_color)
+            profile = SSHProfile(
+                name=name, host=host, user=user, port=port,
+                env_color=env_color, jump_profile_name=jump_profile_name,
+            )
             self.profiles.append(profile)
             self.selected_profile_index = len(self.profiles) - 1
         else:
@@ -3819,6 +3940,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             old_name = profile.name
             profile.name, profile.host, profile.user, profile.port = name, host, user, port
             profile.env_color = env_color
+            profile.jump_profile_name = jump_profile_name
             self.refresh_open_panes_for_profile(profile)
 
         if old_name and old_name != name:
@@ -3846,6 +3968,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.port_var.set("22")
         self.password_var.set("")
         self.set_env_color_selection("")
+        self.refresh_jump_host_options()
+        self.jump_host_var.set("None")
 
         for button in self.profile_buttons:
             if ctk is not None:
@@ -4590,7 +4714,47 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(CONFIG_DIR)  # type: ignore[attr-defined]
 
+    def capture_session_state(self) -> list[dict]:
+        tabs_data = []
+        for tab_id in self.notebook.tabs():
+            widget = self.nametowidget(tab_id)
+            if not isinstance(widget, ConsoleTab):
+                continue
+            profile_names = [pane.profile.name for pane in widget.panes]
+            if not profile_names:
+                continue
+            tabs_data.append({"layout_mode": widget.layout_mode, "profiles": profile_names})
+        return tabs_data
+
+    def maybe_restore_session(self) -> None:
+        tabs_data = SessionStore.load()
+        if not tabs_data:
+            return
+
+        if not show_message(
+            self, "confirm", APP_NAME, f"Reopen {len(tabs_data)} tab(s) from your last session?",
+        ):
+            SessionStore.clear()
+            return
+
+        by_name = {p.name: p for p in self.profiles}
+        for tab_entry in tabs_data:
+            names = tab_entry.get("profiles", [])
+            profiles = [by_name[n] for n in names if n in by_name]
+            if not profiles:
+                continue  # every profile in this tab was renamed/deleted since - skip it
+
+            tab = self.create_console_tab(profiles[0].name)
+            for profile in profiles:
+                tab.add_console(profile)
+
+            layout_mode = tab_entry.get("layout_mode")
+            if layout_mode:
+                tab.set_layout_mode(layout_mode)
+
     def on_close(self) -> None:
+        SessionStore.save(self.capture_session_state())
+
         for tab_id in self.notebook.tabs():
             widget = self.nametowidget(tab_id)
 

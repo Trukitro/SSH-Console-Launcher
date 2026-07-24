@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.0  
+**Current stable version:** v1.5.1  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -30,6 +30,7 @@ The app currently supports:
 - Windows installer wizard (Inno Setup, per-user install)
 - Dark-themed dialogs throughout, resizable sidebar, application icon
 - Recent connections list, per-profile environment tags (prod/staging/dev), SSH config import
+- Jump host / bastion support, session restore on launch
 
 ---
 
@@ -170,16 +171,16 @@ Make managing many profiles faster and safer to navigate.
 
 ---
 
-## v1.5.1 - Core SSH: Bastion & Session Restore
+## v1.5.1 - Core SSH: Bastion & Session Restore ✅ Implemented
 
 ### Goal
 
 Support real-world multi-hop infrastructure and reduce "reopen everything by hand" friction.
 
-### Planned Features
+### Implemented
 
-- **Jump host / bastion support**: a "Jump host" field on the profile (or a separate jump-host profile reference) that runs the connection through `plink -J`-style double hop (plink itself doesn't support `-J`; implement via `-proxycmd "plink -batch -pw ... jumpuser@jumphost -nc %host:%port"` or an equivalent proxy-command chain).
-- **Session restore on launch**: remember the last open tabs/panes/profiles (and layout) and offer to reopen them on next start (prompt, don't auto-reconnect silently - passwords may need re-entry).
+- **Jump host / bastion support**: a "Jump Host" dropdown on the profile references another saved profile; the connection routes through it via `plink -proxycmd` (single hop). Blocked at save time if set to itself; blocked at connect time with a clear error if the referenced profile no longer exists.
+- **Session restore on launch**: the app offers to reopen the last session's tabs/panes/profiles/layout on startup (prompt, not automatic - declining clears the offer).
 
 ---
 
@@ -275,15 +276,14 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0 implemented):
+Recommended next development order (v1.5.0, v1.5.1 implemented):
 
-1. v1.5.1 - Core SSH: Bastion & Session Restore
-2. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
-3. v1.5.3 - Monitoring: History & Multi-Server View
-4. v1.5.4 - Monitoring: Alerts & Generalization
-5. v1.5.5 - Security Hardening
-6. v1.6.1 - Distribution & Release Automation
-7. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+2. v1.5.3 - Monitoring: History & Multi-Server View
+3. v1.5.4 - Monitoring: Alerts & Generalization
+4. v1.5.5 - Security Hardening
+5. v1.6.1 - Distribution & Release Automation
+6. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

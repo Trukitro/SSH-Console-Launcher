@@ -414,10 +414,23 @@ Make managing many saved SSH profiles faster and safer to navigate day-to-day.
 
 ---
 
+## v1.5.1 - Core SSH: Bastion & Session Restore
+
+### Added
+
+- **Jump Host / Bastion Support**: a profile can be routed through another saved profile as a jump host, via `plink -proxycmd` (real, documented plink functionality - not a hack). The jump host's own saved password is resolved/prompted the same way as any profile's. Single-hop only; a profile can't be set to jump through itself (blocked at save time), and a missing/deleted jump-host profile blocks the connection with a clear error instead of silently connecting direct.
+- **Session Restore**: on launch, if tabs were open when the app was last closed, you're asked whether to reopen them (profiles, panes, and layout). Declining clears the offer so it won't ask again until there's a new session to restore. Persisted to `%APPDATA%\EmbeddedSSHLauncher\session.json`.
+
+### Purpose
+
+Support real-world multi-hop infrastructure and reduce "reopen everything by hand" friction after restarting the app.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.0
+v1.5.1
 ```
 
 ---
@@ -443,3 +456,4 @@ v1.5.0
 | v1.4.1 | Web Host Monitoring Dashboard upgrade |
 | v1.4.2 | Bug-fix and visual-polish pass (dialogs, terminal colors, reconnect race, app icon, installer) |
 | v1.5.0 | Recent Connections, Environment Tags, Import from SSH Config |
+| v1.5.1 | Jump Host / Bastion Support, Session Restore |
