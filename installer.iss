@@ -11,7 +11,7 @@
 ; not bundled inside it (see the note in build_exe.ps1 for why).
 
 #define MyAppName "SSH Console Launcher"
-#define MyAppVersion "1.5.0"
+#define MyAppVersion "1.5.1"
 #define MyAppPublisher "Ricardo Velez"
 #define MyAppURL "https://github.com/Trukitro/SSH-Console-Launcher"
 #define MyAppExeName "SSH_Console_Launcher.exe"
