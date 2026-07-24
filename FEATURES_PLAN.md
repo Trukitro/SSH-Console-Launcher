@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.4.2  
+**Current stable version:** v1.5.0  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -29,6 +29,7 @@ The app currently supports:
 - PyInstaller packaging support
 - Windows installer wizard (Inno Setup, per-user install)
 - Dark-themed dialogs throughout, resizable sidebar, application icon
+- Recent connections list, per-profile environment tags (prod/staging/dev), SSH config import
 
 ---
 
@@ -155,17 +156,17 @@ Make deployment easier.
 
 The sections below are the user's top picks from a features brainstorm, grouped into shippable releases. Numbering restarts clean at v1.5.0 (the old v1.4.2-v1.4.6 slot had duplicate/collided version numbers from earlier planning - abandoned in favor of this list).
 
-## v1.5.0 - Profile & Credential Improvements
+## v1.5.0 - Profile & Credential Improvements ✅ Implemented
 
 ### Goal
 
 Make managing many profiles faster and safer to navigate.
 
-### Planned Features
+### Implemented
 
-- **Import from `~/.ssh/config`**: parse `Host`/`HostName`/`User`/`Port`/`IdentityFile` blocks and offer them as importable profiles (preview + select which to import, skip duplicates by name).
-- **Recent connections history**: a short "Recently opened" list (last N profiles opened, most-recent-first) above or alongside the saved profile list for one-click reopen.
-- **Environment color-coding**: a per-profile color tag (e.g. prod=red, staging=yellow, dev=green) shown on the profile button and the terminal pane header/border, so it's visually obvious which environment a pane is connected to before running a command.
+- **Import from `~/.ssh/config`**: parses `Host`/`HostName`/`User`/`Port` blocks and offers them as importable profiles via a checklist dialog; skips duplicates by name and wildcard `Host *` pattern blocks. `IdentityFile` is not imported - no SSH key auth support yet (still in Backlog Ideas).
+- **Recent connections**: a "Recent" sidebar section above "Profiles" lists the last 8 opened profiles, most-recent-first, for one-click reopen.
+- **Environment color-coding**: a per-profile Production/Staging/Development tag (red/amber/green) shown as a border on the profile button and on the terminal pane for that profile, updating live if the tag is edited while the pane is open.
 
 ---
 
@@ -274,16 +275,15 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order:
+Recommended next development order (v1.5.0 implemented):
 
-1. v1.5.0 - Profile & Credential Improvements
-2. v1.5.1 - Core SSH: Bastion & Session Restore
-3. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
-4. v1.5.3 - Monitoring: History & Multi-Server View
-5. v1.5.4 - Monitoring: Alerts & Generalization
-6. v1.5.5 - Security Hardening
-7. v1.6.1 - Distribution & Release Automation
-8. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.1 - Core SSH: Bastion & Session Restore
+2. v1.5.2 - Core SSH: File Transfer & Multi-Pane Input
+3. v1.5.3 - Monitoring: History & Multi-Server View
+4. v1.5.4 - Monitoring: Alerts & Generalization
+5. v1.5.5 - Security Hardening
+6. v1.6.1 - Distribution & Release Automation
+7. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

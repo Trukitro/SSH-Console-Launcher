@@ -80,12 +80,14 @@ except Exception:
     pyte = None
 
 
-APP_NAME = "SSH Console Launcher v1.4.2"
+APP_NAME = "SSH Console Launcher v1.5.0"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
 COMMANDS_FILE = CONFIG_DIR / "commands.json"
 UI_STATE_FILE = CONFIG_DIR / "ui_state.json"
+RECENT_FILE = CONFIG_DIR / "recent.json"
+MAX_RECENT = 8
 DEFAULT_SIDEBAR_WIDTH = 320
 MIN_SIDEBAR_WIDTH = 240
 MAX_SIDEBAR_WIDTH = 560
@@ -130,6 +132,15 @@ PANEL_QUOTE = "#172033"
 # Shared highlight/accent tones used outside the core semantic palette above
 HIGHLIGHT_CODE = "#fef08a"
 HIGHLIGHT_SEARCH = "#facc15"
+
+# Per-profile environment tags: value -> (display label, border color)
+ENV_TAGS = {
+    "": ("None", CARD),
+    "prod": ("Production", DANGER),
+    "staging": ("Staging", WARNING),
+    "dev": ("Development", SUCCESS),
+}
+ENV_TAG_ORDER = ["", "prod", "staging", "dev"]
 
 
 def _clamp_channel(value: int) -> int:
@@ -186,6 +197,8 @@ def build_button(
     height: int = 34,
     corner_radius: int = 10,
     anchor: str | None = None,
+    border_width: int | None = None,
+    border_color: str | None = None,
 ):
     """Single shared CTkButton factory used by every button in the app.
 
@@ -204,6 +217,10 @@ def build_button(
         kwargs["width"] = width
     if anchor is not None:
         kwargs["anchor"] = anchor
+    if border_width is not None:
+        kwargs["border_width"] = border_width
+    if border_color is not None:
+        kwargs["border_color"] = border_color
     return ctk.CTkButton(parent, **kwargs)
 
 
@@ -478,6 +495,70 @@ def find_image_path(filename: str) -> Path | None:
     return None
 
 
+def find_ssh_config_path() -> Path | None:
+    """Locate the user's OpenSSH client config file, if any."""
+    candidate = Path.home() / ".ssh" / "config"
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def parse_ssh_config(path: Path) -> list[dict]:
+    """Parse Host/HostName/User/Port blocks from an OpenSSH config file.
+
+    Only fields the app can actually use today (host/user/port) are
+    extracted - IdentityFile and everything else is ignored, since there's
+    no SSH key auth support yet. A `Host` line naming multiple aliases
+    produces one candidate per alias; any alias containing a glob character
+    (`*` or `?`) is a pattern block, not a real host, and is skipped.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+
+    blocks: list[dict] = []
+    current: list[dict] | None = None
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if "=" in line.split()[0]:
+            key, _, value = line.partition("=")
+        else:
+            parts = line.split(None, 1)
+            key = parts[0]
+            value = parts[1] if len(parts) > 1 else ""
+        key = key.strip().lower()
+        value = value.strip().strip('"')
+
+        if key == "host":
+            aliases = [a for a in value.split() if "*" not in a and "?" not in a]
+            current = [{"name": alias, "host": alias, "user": "", "port": 22} for alias in aliases]
+            blocks.extend(current)
+        elif current is None:
+            continue
+        elif key == "hostname":
+            for entry in current:
+                entry["host"] = value
+        elif key == "user":
+            for entry in current:
+                entry["user"] = value
+        elif key == "port":
+            try:
+                port = int(value)
+            except ValueError:
+                continue
+            for entry in current:
+                entry["port"] = port
+
+    # Require at least a resolvable user; SSHProfile needs one, and an
+    # imported entry with no `User` line isn't safely guessable.
+    return [entry for entry in blocks if entry["user"]]
+
+
 def load_document_text(filename: str) -> tuple[str, str]:
     """Load Markdown text and return (text, source_description)."""
     path = find_document_path(filename)
@@ -522,6 +603,7 @@ class SSHProfile:
     host: str
     user: str
     port: int = 22
+    env_color: str = ""  # "" / "prod" / "staging" / "dev" - see ENV_TAGS
 
 
 @dataclass
@@ -617,6 +699,45 @@ class UIState:
             UI_STATE_FILE.write_text(json.dumps({"sidebar_width": width}, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+
+class RecentStore:
+    """Persisted list of recently-opened profile names, most-recent-first."""
+
+    @staticmethod
+    def load() -> list[str]:
+        if not RECENT_FILE.exists():
+            return []
+        try:
+            raw = json.loads(RECENT_FILE.read_text(encoding="utf-8"))
+            return [str(name) for name in raw][:MAX_RECENT]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _write(names: list[str]) -> list[str]:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            RECENT_FILE.write_text(json.dumps(names, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return names
+
+    @staticmethod
+    def record(name: str) -> list[str]:
+        names = [n for n in RecentStore.load() if n != name]
+        names.insert(0, name)
+        return RecentStore._write(names[:MAX_RECENT])
+
+    @staticmethod
+    def rename(old_name: str, new_name: str) -> list[str]:
+        names = [new_name if n == old_name else n for n in RecentStore.load()]
+        return RecentStore._write(names)
+
+    @staticmethod
+    def remove(name: str) -> list[str]:
+        names = [n for n in RecentStore.load() if n != name]
+        return RecentStore._write(names)
 
 
 class PasswordStore:
@@ -855,6 +976,79 @@ def show_message(parent: tk.Widget, kind: str, title: str, text: str) -> bool | 
     dialog.focus_set()
     dialog.wait_window()
     return result["value"]
+
+
+def ask_ssh_config_import(parent: tk.Widget, entries: list[dict]) -> list[dict]:
+    """Show a checklist of parsed ~/.ssh/config entries; return the ones selected.
+
+    Same CTkToplevel/grab_set()/wait_window() dialog pattern as ask_text()
+    and show_message(). Returns [] if the dialog is cancelled or closed.
+    """
+    if ctk is None:
+        return []
+
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title("Import from SSH Config")
+    width, height = 480, 480
+    center_toplevel(dialog, parent, width, height)
+    dialog.minsize(360, 300)
+    dialog.transient(parent)
+    dialog.configure(fg_color=BG)
+    dialog.grab_set()
+
+    result: list[dict] = []
+    check_vars: list[tuple[tk.BooleanVar, dict]] = []
+
+    frame = ctk.CTkFrame(dialog, fg_color=PANEL, corner_radius=16)
+    frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+    ctk.CTkLabel(
+        frame,
+        text=f"Found {len(entries)} host(s) in ~/.ssh/config",
+        text_color=TEXT,
+        font=ctk.CTkFont(size=14, weight="bold"),
+    ).pack(anchor="w", padx=16, pady=(16, 8))
+
+    select_all_var = tk.BooleanVar(value=True)
+
+    def toggle_all() -> None:
+        for var, _entry in check_vars:
+            var.set(select_all_var.get())
+
+    ctk.CTkCheckBox(
+        frame, text="Select all", variable=select_all_var, command=toggle_all, text_color=TEXT,
+    ).pack(anchor="w", padx=16, pady=(0, 6))
+
+    list_frame = ctk.CTkScrollableFrame(frame, fg_color=PANEL_DARK)
+    list_frame.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+    for entry in entries:
+        var = tk.BooleanVar(value=True)
+        label = f"{entry['name']}  ({entry['user']}@{entry['host']}:{entry['port']})"
+        ctk.CTkCheckBox(list_frame, text=label, variable=var, text_color=TEXT).pack(anchor="w", pady=3)
+        check_vars.append((var, entry))
+
+    button_row = ctk.CTkFrame(frame, fg_color="transparent")
+    button_row.pack(fill="x", padx=16, pady=(0, 16))
+
+    def cancel() -> None:
+        dialog.destroy()
+
+    def do_import() -> None:
+        result.extend(entry for var, entry in check_vars if var.get())
+        dialog.destroy()
+
+    ctk.CTkButton(
+        button_row, text="Cancel", command=cancel, fg_color=CARD, hover_color=CARD_HOVER, text_color=TEXT, width=100,
+    ).pack(side="right", padx=(8, 0))
+    ctk.CTkButton(
+        button_row, text="Import Selected", command=do_import, fg_color=ACCENT, hover_color=ACCENT_HOVER, width=140,
+    ).pack(side="right")
+
+    dialog.protocol("WM_DELETE_WINDOW", cancel)
+    dialog.focus_set()
+    dialog.wait_window()
+    return result
 
 
 class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
@@ -1687,6 +1881,9 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.plink_path = plink_path
         self.password = password or ""
 
+        if ctk is not None:
+            self.apply_env_border()
+
         self.proc = None
         self.reader_thread: threading.Thread | None = None
         self.output_queue: queue.Queue[object] = queue.Queue()
@@ -1844,6 +2041,13 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             return
         text = f"{self.profile.name}  {self.profile.user}@{self.profile.host}:{self.profile.port}"
         self.title_label.configure(text=text)
+        if ctk is not None:
+            self.apply_env_border()
+
+    def apply_env_border(self) -> None:
+        """Show the pane's environment tag (prod/staging/dev) as a colored frame border."""
+        _label, color = ENV_TAGS.get(self.profile.env_color, ENV_TAGS[""])
+        self.configure(border_width=3 if self.profile.env_color else 0, border_color=color)
 
     def set_connection_state(self, state: str, message: str | None = None) -> None:
         """Update the visible connection status indicator for this terminal pane."""
@@ -2533,6 +2737,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
         self.set_active_terminal(terminal)
         terminal.focus_terminal()
+        self.app.record_recent_connection(profile.name)
 
     def set_active_terminal(self, terminal: EmbeddedTerminal) -> None:
         if self.active_terminal is not None and self.active_terminal is not terminal:
@@ -2833,6 +3038,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         self.profile_buttons: list[ctk.CTkButton] = []
         self.command_buttons: list[ctk.CTkButton] = []
+        self.recent_buttons: list[ctk.CTkButton] = []
+        self.recent_names: list[str] = RecentStore.load()
 
         self.monitoring_dashboard: "MonitoringDashboardWindow | None" = None
         self._keyring_warned = False
@@ -2841,6 +3048,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._build_ui()
         self.refresh_profiles()
         self.refresh_commands()
+        self.refresh_recent()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -3020,13 +3228,25 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         return build_button(parent, text, command, color, width=92)
 
     def _build_sidebar(self) -> None:
+        self._sidebar_title("Recent")
+
+        self.recent_buttons_frame = ctk.CTkFrame(
+            self.sidebar,
+            fg_color="transparent",
+        ) if ctk is not None else ttk.Frame(self.sidebar)
+        self.recent_buttons_frame.pack(fill="x", padx=12, pady=(6, 12))
+
         self._sidebar_title("Profiles")
 
         self.profile_buttons_frame = ctk.CTkFrame(
             self.sidebar,
             fg_color="transparent",
         ) if ctk is not None else ttk.Frame(self.sidebar)
-        self.profile_buttons_frame.pack(fill="x", padx=12, pady=(6, 12))
+        self.profile_buttons_frame.pack(fill="x", padx=12, pady=(6, 6))
+
+        # Outside profile_buttons_frame on purpose - that frame's children are
+        # destroyed and rebuilt on every refresh_profiles() call.
+        self._side_button(self.sidebar, "Import from SSH Config", self.import_from_ssh_config, CARD_HOVER)
 
         self._sidebar_title("Connection")
 
@@ -3048,6 +3268,31 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.user_entry = self._form_row(self.profile_form, "User", self.user_var)
         self.port_entry = self._form_row(self.profile_form, "Port", self.port_var)
         self.password_entry = self._form_row(self.profile_form, "Password", self.password_var, show="*")
+
+        self.env_color_var = tk.StringVar(value="")
+        self.env_swatch_buttons: dict[str, "ctk.CTkButton"] = {}
+
+        if ctk is not None:
+            ctk.CTkLabel(
+                self.profile_form,
+                text="Environment",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+
+            env_row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
+            env_row.pack(fill="x", padx=12, pady=(0, 2))
+
+            for tag in ENV_TAG_ORDER:
+                label, color = ENV_TAGS[tag]
+                button = build_button(
+                    env_row, label, lambda t=tag: self.set_env_color_selection(t), color,
+                    height=28, corner_radius=8,
+                )
+                button.pack(side="left", fill="x", expand=True, padx=2)
+                self.env_swatch_buttons[tag] = button
+
+            self.set_env_color_selection("")
 
         if ctk is not None:
             row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
@@ -3314,6 +3559,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         for index, profile in enumerate(self.profiles):
             label = f"{profile.name}\n{profile.user}@{profile.host}:{profile.port}"
+            _env_label, env_border = ENV_TAGS.get(profile.env_color, ENV_TAGS[""])
 
             if ctk is not None:
                 button = ctk.CTkButton(
@@ -3326,6 +3572,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                     anchor="w",
                     height=52,
                     corner_radius=12,
+                    border_width=3 if profile.env_color else 0,
+                    border_color=env_border,
                 )
                 button.pack(fill="x", pady=4)
                 button.bind("<Double-Button-1>", lambda _event, i=index: self.open_profile_by_index(i))
@@ -3339,6 +3587,56 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 button.pack(fill="x")
                 self.profile_buttons.append(button)
 
+    def refresh_recent(self) -> None:
+        for widget in self.recent_buttons_frame.winfo_children():
+            widget.destroy()
+
+        self.recent_buttons = []
+        by_name = {profile.name: profile for profile in self.profiles}
+
+        for name in self.recent_names:
+            profile = by_name.get(name)
+            if profile is None:
+                continue  # renamed or deleted since it was last opened - skip silently
+
+            label = f"{profile.name}\n{profile.user}@{profile.host}:{profile.port}"
+            _env_label, env_border = ENV_TAGS.get(profile.env_color, ENV_TAGS[""])
+
+            if ctk is not None:
+                button = build_button(
+                    self.recent_buttons_frame,
+                    label,
+                    lambda n=name: self.open_profile_by_name(n),
+                    CARD,
+                    height=44,
+                    corner_radius=12,
+                    anchor="w",
+                    border_width=3 if profile.env_color else 0,
+                    border_color=env_border,
+                )
+                button.pack(fill="x", pady=3)
+                self.recent_buttons.append(button)
+            else:
+                button = ttk.Button(
+                    self.recent_buttons_frame,
+                    text=label,
+                    command=lambda n=name: self.open_profile_by_name(n),
+                )
+                button.pack(fill="x")
+                self.recent_buttons.append(button)
+
+        if not self.recent_buttons and ctk is not None:
+            ctk.CTkLabel(
+                self.recent_buttons_frame,
+                text="Profiles you open will show up here.",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=11),
+            ).pack(anchor="w", padx=2, pady=2)
+
+    def record_recent_connection(self, name: str) -> None:
+        self.recent_names = RecentStore.record(name)
+        self.refresh_recent()
+
     def select_profile(self, index: int) -> None:
         if index < 0 or index >= len(self.profiles):
             return
@@ -3351,6 +3649,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.user_var.set(profile.user)
         self.port_var.set(str(profile.port))
         self.password_var.set("")
+        self.set_env_color_selection(profile.env_color)
 
         for idx, button in enumerate(self.profile_buttons):
             if ctk is not None:
@@ -3365,6 +3664,23 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
     def open_profile_by_index(self, index: int) -> None:
         self.select_profile(index)
         self.open_new_tab()
+
+    def open_profile_by_name(self, name: str) -> None:
+        for index, profile in enumerate(self.profiles):
+            if profile.name == name:
+                self.open_profile_by_index(index)
+                return
+
+    def set_env_color_selection(self, tag: str) -> None:
+        """Update the Environment swatch row in the Connection form to show `tag` selected."""
+        if tag not in ENV_TAGS:
+            tag = ""
+        self.env_color_var.set(tag)
+        if ctk is None:
+            return
+        for swatch_tag, button in self.env_swatch_buttons.items():
+            selected = swatch_tag == tag
+            button.configure(border_width=3 if selected else 0, border_color=TEXT)
 
     def refresh_commands(self) -> None:
         for widget in self.command_buttons_frame.winfo_children():
@@ -3486,9 +3802,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             return
 
         old_name = None
+        env_color = self.env_color_var.get()
+        if env_color not in ENV_TAGS:
+            env_color = ""
 
         if self.selected_profile_index is None:
-            profile = SSHProfile(name=name, host=host, user=user, port=port)
+            profile = SSHProfile(name=name, host=host, user=user, port=port, env_color=env_color)
             self.profiles.append(profile)
             self.selected_profile_index = len(self.profiles) - 1
         else:
@@ -3499,10 +3818,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             profile = self.profiles[self.selected_profile_index]
             old_name = profile.name
             profile.name, profile.host, profile.user, profile.port = name, host, user, port
+            profile.env_color = env_color
             self.refresh_open_panes_for_profile(profile)
 
         if old_name and old_name != name:
             PasswordStore.delete(old_name)
+            self.recent_names = RecentStore.rename(old_name, name)
 
         if password:
             try:
@@ -3512,6 +3833,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         ProfileStore.save(self.profiles)
         self.refresh_profiles()
+        self.refresh_recent()
         self.select_profile(self.selected_profile_index)
         self.status_var.set(f"Saved profile: {name}")
 
@@ -3523,6 +3845,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.user_var.set("")
         self.port_var.set("22")
         self.password_var.set("")
+        self.set_env_color_selection("")
 
         for button in self.profile_buttons:
             if ctk is not None:
@@ -3542,13 +3865,49 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         PasswordStore.delete(profile.name)
         del self.profiles[self.selected_profile_index]
+        self.recent_names = RecentStore.remove(profile.name)
 
         self.selected_profile_index = None
 
         ProfileStore.save(self.profiles)
         self.refresh_profiles()
+        self.refresh_recent()
         self.clear_form()
         self.status_var.set(f"Deleted profile: {profile.name}")
+
+    def import_from_ssh_config(self) -> None:
+        path = find_ssh_config_path()
+        if path is None:
+            show_message(self, "error", APP_NAME, "No SSH config file found at ~/.ssh/config.")
+            return
+
+        entries = parse_ssh_config(path)
+        if not entries:
+            show_message(self, "info", APP_NAME, "No importable Host entries found in ~/.ssh/config.")
+            return
+
+        selected = ask_ssh_config_import(self, entries)
+        if not selected:
+            return
+
+        existing_names = {p.name.strip().lower() for p in self.profiles}
+        imported = 0
+        skipped = 0
+
+        for entry in selected:
+            if entry["name"].strip().lower() in existing_names:
+                skipped += 1
+                continue
+            profile = SSHProfile(name=entry["name"], host=entry["host"], user=entry["user"], port=entry["port"])
+            self.profiles.append(profile)
+            existing_names.add(profile.name.strip().lower())
+            imported += 1
+
+        if imported:
+            ProfileStore.save(self.profiles)
+            self.refresh_profiles()
+
+        self.status_var.set(f"Imported {imported} profile(s), skipped {skipped} (name already exists).")
 
     def add_command(self) -> None:
         name = ask_text(self, APP_NAME, "Command button name:")

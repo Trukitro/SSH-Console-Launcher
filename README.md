@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.4.2  
+**Current version:** 1.5.0  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -43,6 +43,16 @@ Profiles are saved in:
 ```text
 %APPDATA%\EmbeddedSSHLauncher\profiles.json
 ```
+
+---
+
+### Recent Connections, Environment Tags, and SSH Config Import
+
+Starting with version 1.5.0:
+
+- **Recent**: the sidebar shows the last profiles you opened, most-recent-first, for one-click reopen.
+- **Environment tags**: mark a profile as Production, Staging, or Development from the Connection form. The tag shows as a colored border on the profile button and on any open terminal pane for that profile - red/amber/green, so it's obvious at a glance which environment a pane is talking to.
+- **Import from SSH Config**: bulk-import `Host` entries from your existing `~/.ssh/config` as profiles (host/user/port only - password is entered on first connect, same as a manually-created profile).
 
 ---
 
@@ -412,10 +422,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.4.2
+v1.5.0
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, and the advanced Web Host Monitoring Dashboard upgrade, plus a v1.4.2 bug-fix and visual-polish pass (dark-themed dialogs, terminal color fixes, reconnect race fix, resizable sidebar, app icon). See `VERSION_HISTORY.md` for details.
+This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, and v1.5.0's Recent Connections, Environment Tags, and SSH Config Import. See `VERSION_HISTORY.md` for details.
 
 ---
 

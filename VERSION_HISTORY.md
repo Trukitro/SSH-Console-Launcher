@@ -392,6 +392,7 @@ Help detect early warning signs before the web server reaches a state where user
 - Monitoring Dashboard's card grid now adapts its column count to the window width.
 - Application icon and taskbar icon.
 - Developer documentation set under `doc/` (architecture, configuration, build, and a generated codebase knowledge graph).
+- Windows installer wizard (`installer.iss`, Inno Setup): per-user install, no admin/UAC, Start Menu shortcut, optional desktop shortcut, uninstaller. Fixed `build_exe.ps1` to stop bundling `plink.exe` via `--add-binary`, which was silently non-functional (see `doc/BUILD.md`); it now ships as a loose sibling file instead.
 
 ### Purpose
 
@@ -399,10 +400,24 @@ Stability and polish pass with no new user-facing features: fix the bugs and vis
 
 ---
 
+## v1.5.0 - Profile & Credential Improvements
+
+### Added
+
+- **Recent Connections**: a "Recent" sidebar section lists the last opened profiles, most-recent-first, for one-click reopen. Persisted to `%APPDATA%\EmbeddedSSHLauncher\recent.json`.
+- **Environment Tags**: profiles can be tagged Production/Staging/Development from the Connection form. The tag renders as a colored border (red/amber/green) on the profile button and on any open terminal pane for that profile, and updates live if the tag is edited while the pane is open.
+- **Import from SSH Config**: bulk-import `Host` entries from `~/.ssh/config` (host/user/port only - no SSH key auth yet, so `IdentityFile` is not imported). Wildcard `Host *` blocks are excluded; entries missing a `User` line are skipped since it can't be safely guessed. Duplicate names (case-insensitive) are skipped and counted.
+
+### Purpose
+
+Make managing many saved SSH profiles faster and safer to navigate day-to-day.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.4.2
+v1.5.0
 ```
 
 ---
@@ -426,4 +441,5 @@ v1.4.2
 | v1.3.9 | Layout Manager controls for 2, 3, and 4 pane layouts |
 | v1.4.0 | Web2py Monitoring Dashboard |
 | v1.4.1 | Web Host Monitoring Dashboard upgrade |
-| v1.4.2 | Bug-fix and visual-polish pass (dialogs, terminal colors, reconnect race, app icon) |
+| v1.4.2 | Bug-fix and visual-polish pass (dialogs, terminal colors, reconnect race, app icon, installer) |
+| v1.5.0 | Recent Connections, Environment Tags, Import from SSH Config |
