@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+pythonenv*
+venv/
+.venv/
+env/
+ENV/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# App generated files / local configs
+profiles.json
+commands.json
+*.log
+logs/
+*.tmp
+
+# Local runtime files
+plink.exe
+*.ppk
+*.pem
+*.key
+id_rsa
+id_ed25519
+known_hosts
+
+# IDE / editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Backups
+*.bak
+*.backup
+*.old
+*.orig
+
+# Packages
+*.zip
+*.7z
+*.rar
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Do not commit generated executables unless intentionally releasing
+*.exe
+*.msi
+
+# Generated knowledge graph (regenerate locally with graphify)
+graphify-out/

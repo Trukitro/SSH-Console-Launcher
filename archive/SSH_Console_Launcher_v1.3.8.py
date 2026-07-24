@@ -1,0 +1,2960 @@
+"""
+Embedded SSH Console Launcher for Windows - Version 1.3.8 Grid Split Layout
+
+Features:
+- Modern CustomTkinter dark UI.
+- Save SSH profiles.
+- Store passwords with keyring / Windows Credential Manager.
+- Auto-login with plink.exe.
+- Open SSH consoles inside this GUI.
+- Tabs and split panes.
+- Smart grid layouts for 3 and 4 split views.
+- Vertical/horizontal split layout.
+- Close each console with a mouse click.
+- Reconnect each console with a mouse click.
+- Rename tabs.
+- Double-click a tab to rename it.
+- Close tabs using the X in the tab title.
+- Quick command buttons.
+- Add/edit/delete saved commands.
+- Run saved commands in the currently focused terminal.
+- Clear focused console.
+- Better terminal rendering using pyte.
+- Extra cleanup for htop/top/nano/vim style terminal output.
+- Safer tab close handling.
+- Full tab cleanup so closed tabs disappear correctly.
+- ANSI foreground/background colors in the terminal renderer.
+- Green/red connection status indicator per terminal pane.
+- Fixed focused terminal routing for toolbar and quick commands.
+- Closing the last console in a tab now closes and destroys the tab.
+- Built-in documentation viewer for README and version history Markdown files.
+
+Requirements:
+    pip install pywinpty keyring pyte customtkinter
+
+Runtime requirement:
+- Put plink.exe beside this script/exe, or install PuTTY and add it to PATH.
+
+Build portable EXE:
+    pip install pyinstaller pywinpty keyring pyte customtkinter
+    pyinstaller --onefile --windowed --add-binary "plink.exe;." --add-data "README_Embedded_SSH_Launcher.md;." --add-data "VERSION_HISTORY_Embedded_SSH_Launcher.md;." SSH_Console_Launcher_v1_3_8.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import re
+import shutil
+import sys
+import threading
+import time
+import tkinter as tk
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from tkinter import messagebox, simpledialog, ttk
+
+try:
+    import customtkinter as ctk
+except Exception:
+    ctk = None
+
+try:
+    import keyring
+except Exception:
+    keyring = None
+
+try:
+    from winpty import PtyProcess
+except Exception:
+    PtyProcess = None
+
+try:
+    import pyte
+except Exception:
+    pyte = None
+
+
+APP_NAME = "Embedded SSH Launcher v1.3.8"
+SERVICE_NAME = "EmbeddedSSHLauncher"
+CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
+CONFIG_FILE = CONFIG_DIR / "profiles.json"
+COMMANDS_FILE = CONFIG_DIR / "commands.json"
+DOC_README_FILE = "README_Embedded_SSH_Launcher.md"
+DOC_VERSION_FILE = "VERSION_HISTORY_Embedded_SSH_Launcher.md"
+DOC_FILE_NAMES = [DOC_README_FILE, DOC_VERSION_FILE]
+
+MAX_PANES_PER_TAB = 4
+TAB_CLOSE_SUFFIX = "   ×"
+
+BG = "#0f172a"
+PANEL = "#111827"
+PANEL_2 = "#1f2937"
+CARD = "#1e293b"
+CARD_HOVER = "#334155"
+ACCENT = "#2563eb"
+ACCENT_HOVER = "#1d4ed8"
+SUCCESS = "#16a34a"
+DANGER = "#dc2626"
+WARNING = "#d97706"
+TEXT = "#e5e7eb"
+MUTED = "#9ca3af"
+TERMINAL_BG = "#050505"
+TERMINAL_FG = "#f8fafc"
+CONNECTED = "#22c55e"
+DISCONNECTED = "#ef4444"
+CONNECTING = "#f59e0b"
+
+ANSI_COLOR_MAP = {
+    "default": TERMINAL_FG,
+    # Normal terminal black/dim colors are too hard to read on the app black background.
+    # These are intentionally brightened for htop/uwsgitop readability.
+    "black": "#cbd5e1",
+    "red": "#ff6b6b",
+    "green": "#4ade80",
+    "yellow": "#fde047",
+    "brown": "#fde047",
+    "blue": "#60a5fa",
+    "magenta": "#e879f9",
+    "cyan": "#22d3ee",
+    "white": "#f8fafc",
+    "brightblack": "#e5e7eb",
+    "brightred": "#fca5a5",
+    "brightgreen": "#86efac",
+    "brightyellow": "#fef08a",
+    "brightblue": "#93c5fd",
+    "brightmagenta": "#f0abfc",
+    "brightcyan": "#67e8f9",
+    "brightwhite": "#ffffff",
+    "lightblack": "#e5e7eb",
+    "lightred": "#fca5a5",
+    "lightgreen": "#86efac",
+    "lightyellow": "#fef08a",
+    "lightblue": "#93c5fd",
+    "lightmagenta": "#f0abfc",
+    "lightcyan": "#67e8f9",
+    "lightwhite": "#ffffff",
+}
+
+ANSI_BACKGROUND_MAP = {
+    **ANSI_COLOR_MAP,
+    "default": TERMINAL_BG,
+}
+
+EMBEDDED_DOCUMENTS = {
+    DOC_README_FILE: '# Embedded SSH Console Launcher\n\n**Current version:** 1.3.8  \n**Platform:** Windows 10 / Windows 11  \n**Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.\n\n---\n\n## Overview\n\nEmbedded SSH Console Launcher is a Windows desktop app built in Python. It was created to make repeated SSH work faster and easier, especially when connecting to the same Linux servers many times per day.\n\nInstead of opening separate command prompt windows or manually typing usernames, passwords, and commands every time, the app lets you:\n\n- Save SSH profiles.\n- Open one or more SSH consoles quickly.\n- Use tabs and split panes.\n- Auto-login with saved credentials.\n- Run frequently used commands with one click.\n- Monitor session connection status.\n- Reconnect, clear, focus, and close sessions from the GUI.\n\nThe app is designed for a maximum practical workflow of around 1 to 4 terminals per tab, but it can support multiple tabs.\n\n---\n\n## Main Features\n\n### SSH Profile Management\n\nYou can save SSH profiles with:\n\n- Profile name\n- Host / IP\n- Username\n- Port\n- Password\n\nPasswords are stored using the Windows credential/keyring system through the Python `keyring` package. Passwords are not stored directly in the JSON profile file.\n\nProfiles are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\profiles.json\n```\n\n---\n\n### Embedded SSH Consoles\n\nThe app opens SSH sessions inside the GUI instead of launching separate Windows Terminal windows.\n\nEach console supports:\n\n- Auto-login\n- Terminal output rendering\n- ANSI color handling\n- `htop`\n- `uwsgitop`\n- `tail -f`\n- Standard shell commands\n- Copy/paste\n- Reconnect\n- Clear\n- Close\n- Focus selection\n\nSSH sessions are launched through `plink.exe` from PuTTY.\n\n---\n\n### Tabs and Split Panes\n\nThe app supports:\n\n- New tab\n- Split current tab\n- Open 2 split consoles\n- Open 3 split consoles\n- Open 4 split consoles\n- Vertical split\n- Horizontal split\n- Rename current tab\n- Close current tab\n- Close tab using the `×` symbol\n\nIf the last console in a tab is closed, the tab is also destroyed.\n\n---\n\n### Quick Commands\n\nQuick Commands let you create buttons for commands you run often.\n\nDefault quick commands include:\n\n```bash\nhtop\ncd /home/www-data/web2py/\ntail -f web2py.log\nsudo uwsgitop /tmp/stats.socket\nclear\n```\n\nYou can add, edit, and delete commands from the GUI.\n\nQuick commands are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\nQuick commands are sent to the currently focused terminal.\n\n---\n\n### Connection Status Indicator\n\nEach terminal shows a connection status indicator:\n\n```text\n● Connected\n● Connecting\n● Disconnected\n```\n\nThe indicator helps identify when a session has dropped and needs reconnecting.\n\n---\n\n### Modern UI\n\nStarting with version 1.3, the UI uses `customtkinter` for a modern dark interface.\n\nUI improvements include:\n\n- Dark theme\n- Modern left sidebar\n- Rounded buttons\n- Toolbar actions\n- Quick command buttons\n- Highlighted active terminal\n- Status bar\n- Improved layout and spacing\n\n---\n\n## Requirements\n\nInstall Python packages:\n\n```powershell\npip install pywinpty keyring pyte customtkinter\n```\n\nRequired executable:\n\n```text\nplink.exe\n```\n\nPlace `plink.exe` in the same folder as the Python script or compiled `.exe`, or install PuTTY and add it to your PATH.\n\n---\n\n## Running the App\n\nExample:\n\n```powershell\n& c:\\python312\\python.exe c:\\Users\\Ricrado\\Documents\\Python_Scripts\\SSH_Console_Launcher_v1_3_6.py\n```\n\n---\n\n## Building a Portable EXE\n\nInstall build tools:\n\n```powershell\npip install pyinstaller pywinpty keyring pyte customtkinter\n```\n\nBuild:\n\n```powershell\npyinstaller --onefile --windowed --add-binary "plink.exe;." SSH_Console_Launcher_v1_3_6.py\n```\n\nThe final executable will be created in:\n\n```text\ndist\\\n```\n\nRecommended folder structure:\n\n```text\nSSHLauncher\\\n  SSH_Console_Launcher_v1_3_6.exe\n  plink.exe\n```\n\n---\n\n## Configuration Files\n\nThe app stores user data in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\\n```\n\nFiles:\n\n```text\nprofiles.json\ncommands.json\n```\n\nPasswords are stored through Windows/keyring, not directly in these files.\n\n---\n\n## Security Notes\n\nThis app is designed for internal/personal administrative use.\n\nImportant notes:\n\n- Passwords are saved through `keyring`, not plain JSON.\n- `plink.exe -pw` is used for automatic login.\n- SSH key support is a recommended future improvement.\n- Anyone with access to your Windows user session may be able to use the saved profiles.\n- Use Windows account protection and disk encryption where appropriate.\n\n---\n\n## Known Limitations\n\nThe app uses `tk.Text` plus `pyte` for terminal rendering. This works well enough for the current workflow, including `htop` and `uwsgitop`, but it is not a full native terminal emulator like Windows Terminal, xterm, or xterm.js.\n\nSome highly interactive terminal applications may still have minor rendering differences.\n\nExamples that may not be perfect:\n\n- Complex `vim` usage\n- Some `nano` layouts\n- Advanced ncurses interfaces\n- Mouse interactions inside terminal apps\n\n---\n\n## Recommended Next Steps\n\nPotential future improvements:\n\n1. Hotkeys for Quick Commands, such as `Ctrl+1`, `Ctrl+2`, etc.\n2. Command groups, such as Web2py, Logs, Monitoring, Docker, Database.\n3. Auto-reconnect option when a connection drops.\n4. Save layouts per profile.\n5. Open a profile with a predefined set of panes and commands.\n6. Run a command on all panes.\n7. Local session logging.\n8. Search inside terminal output.\n9. Import/export profiles and commands.\n10. SSH key support.\n11. Full installer with `plink.exe` included.\n12. Possible migration to xterm.js/WebView for more complete terminal rendering.\n\n\n---\n\n## Smart Split Layouts\n\nStarting with version 1.3.8, the app uses smarter layouts for multi-console split views.\n\n- Open 3 Split: two consoles appear on the top row and one full-width console appears on the bottom row.\n- Open 4 Split: consoles appear in a 2 x 2 square layout.\n\nThe manual Vertical Split and Horizontal Split buttons still force a simple stacked or side-by-side layout.\n\n---\n\n## Built-in Documentation Viewer\n\nStarting with version 1.3.7, the app includes a built-in documentation viewer.\n\nThe viewer can display these Markdown files inside the app:\n\n```text\nREADME_Embedded_SSH_Launcher.md\nVERSION_HISTORY_Embedded_SSH_Launcher.md\n```\n\nThe app searches for these files in this order:\n\n1. The same folder as the `.py` script or `.exe` file.\n2. The PyInstaller temporary bundled resource folder when running as a one-file `.exe`.\n3. The app configuration folder under `%APPDATA%`.\n4. Embedded fallback Markdown content inside the Python source.\n\nThis means the documentation can be bundled into the Windows `.exe` and still be readable from inside the app.\n\nWhen building with PyInstaller, include the Markdown files:\n\n```powershell\npyinstaller --onefile --windowed `\n  --add-binary "plink.exe;." `\n  --add-data "README_Embedded_SSH_Launcher.md;." `\n  --add-data "VERSION_HISTORY_Embedded_SSH_Launcher.md;." `\n  SSH_Console_Launcher_v1_3_8.py\n```\n\n---\n\n## Current Stable Version\n\nThe current working version is:\n\n```text\nv1.3.8\n```\n\nThis version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, and corrected focus behavior.\n',
+    DOC_VERSION_FILE: '# Embedded SSH Console Launcher - Version History\n\nThis file tracks the project evolution from the first working concept through the current stable version.\n\n---\n\n## v1.0 - Initial Working GUI\n\n### Goal\n\nCreate a small Windows GUI that can save SSH connection information and open SSH consoles quickly.\n\n### Main Features\n\n- Tkinter-based GUI.\n- Save SSH profiles.\n- Store host, user, port, and password.\n- Open SSH sessions using `plink.exe`.\n- Support opening multiple consoles.\n- Basic tab and split-pane workflow.\n- Automatic password login.\n- Basic terminal output display.\n\n### Notes\n\nThis version proved that the core workflow was possible:\n\n```text\nSave profile -> Select profile -> Open console quickly\n```\n\n---\n\n## v1.1 - Tabs, Rename, Close, and Reconnect\n\n### Added\n\n- Rename current tab.\n- Double-click tab to rename.\n- `×` symbol in tab title.\n- Click `×` to close a tab.\n- Reconnect button per console.\n- Reconnect selected console from the sidebar.\n- Better session lifecycle handling.\n\n### Fixed / Improved\n\n- Added better control over individual SSH panes.\n- Added reconnect behavior without needing to close and reopen the whole app.\n\n---\n\n## v1.2 - Quick Commands\n\n### Added\n\n- Quick Commands section.\n- Add custom command buttons.\n- Edit saved commands.\n- Delete saved commands.\n- Run command in focused terminal.\n- General Clear Console command.\n- Default commands:\n  - `htop`\n  - `cd /home/www-data/web2py/`\n  - `tail -f web2py.log`\n  - `sudo uwsgitop /tmp/stats.socket`\n  - `clear`\n\n### Files Added\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\n### Purpose\n\nReduce repetitive typing for common admin commands.\n\n---\n\n## v1.3 - Modern UI Refresh\n\n### Added\n\n- CustomTkinter UI.\n- Modern dark theme.\n- Rounded buttons.\n- Better sidebar layout.\n- Top toolbar.\n- Modern connection/profile form.\n- Quick command buttons instead of only listbox style.\n- Improved spacing.\n- Status bar.\n- Active terminal visual highlight.\n\n### Dependencies Added\n\n```powershell\npip install customtkinter\n```\n\n### Notes\n\nThis version modernized the appearance while keeping the working SSH and terminal backend.\n\n---\n\n## v1.3.1 - CustomTkinter Startup Fix\n\n### Fixed\n\n- `CTkScrollableFrame.grid_propagate(False)` startup crash.\n\n### Cause\n\n`CTkScrollableFrame.grid_propagate()` does not accept `False` like a normal Tkinter frame.\n\n### Fix\n\nUse:\n\n```python\nself.sidebar.configure(width=320)\n```\n\ninstead of:\n\n```python\nself.sidebar.grid_propagate(False)\n```\n\nfor CustomTkinter scrollable frames.\n\n---\n\n## v1.3.2 - Safer Tab Close Handling\n\n### Fixed\n\n- Accidental tab closing when clicking or selecting terminal text.\n- Fake `×` tab close area was too aggressive.\n\n### Added\n\n- Press/release tracking for tab close.\n- Smaller close zone.\n- Close only if press and release both happen on the `×` area.\n- Ignore drag/focus/select actions.\n\n### Methods Added / Updated\n\n- `get_tab_close_candidate`\n- `on_notebook_button_press`\n- `on_notebook_button_release`\n\n---\n\n## v1.3.3 - Tab Destruction and Terminal Color Support\n\n### Fixed\n\n- Closed tabs could remain visible or not disappear.\n- Notebook tab was being forgotten but not fully destroyed.\n- Old tab references could remain in memory.\n- SSH processes could remain alive after closing a tab.\n\n### Improved\n\n- Fully destroy tab frame after closing.\n- Close all SSH panes inside a tab before removing the tab.\n- Clear active/focused terminal references when closing tabs.\n- Delay close using `after(1, ...)` so notebook finishes processing click events first.\n\n### Added\n\n- ANSI terminal color support using `pyte` character attributes.\n- Text tags for terminal foreground/background colors.\n- Support for bold, underline, reverse video, and cursor highlighting.\n\n---\n\n## v1.3.4 - Connection Status Indicator\n\n### Added\n\n- Connection status indicator per terminal:\n  - `● Connected`\n  - `● Connecting`\n  - `● Disconnected`\n- Status color:\n  - Green for connected\n  - Orange for connecting\n  - Red for disconnected\n\n### Improved\n\n- SSH sessions are checked periodically.\n- Dropped connections are shown visually.\n- Reconnect changes status back through connecting to connected.\n\n### Purpose\n\nMake it obvious when a terminal session needs reconnecting.\n\n---\n\n## v1.3.5 - High Contrast Terminal Colors\n\n### Fixed\n\n- Some `htop` and `uwsgitop` colors were too dark.\n- Processor numbers, users, and dim values were hard to read.\n\n### Improved\n\n- Dark gray / black foreground values are remapped to readable light gray/white.\n- Contrast protection checks foreground/background contrast.\n- If contrast is too low, text is forced brighter.\n\n### Purpose\n\nImprove readability of colored terminal applications on black background.\n\n---\n\n## v1.3.6 - Focus, Close, and Quick Command Behavior Fixes\n\n### Fixed\n\n- Quick Commands were sometimes sent to the wrong terminal.\n- Focus button did not correctly make a terminal active.\n- Top toolbar buttons did not always act on the correct terminal.\n- Close button inside a terminal closed the pane but did not destroy the tab when it was the last terminal.\n- App could keep references to closed terminals.\n- Active terminal highlighting could become stale.\n\n### Improved\n\n- Focus now updates:\n  - Current terminal\n  - Current tab\n  - App-level focused terminal reference\n  - Active visual state\n- Quick commands now send to the actual focused terminal.\n- Top toolbar actions now use the focused terminal or current tab correctly.\n- Closing the last terminal in a tab closes and destroys the entire tab.\n- Console cleanup is more complete.\n\n### Current Status\n\nThis is the current stable version.\n\n---\n\n## v1.3.7 - Built-in Documentation Viewer\n\n### Added\n\n- Built-in documentation viewer inside the app.\n- Documentation section in the sidebar.\n- In-app Markdown rendering for:\n  - `README_Embedded_SSH_Launcher.md`\n  - `VERSION_HISTORY_Embedded_SSH_Launcher.md`\n- GitHub-like Markdown styling using Tk text tags.\n- Search box inside the documentation viewer.\n- Reload documentation button.\n- Open documentation folder button.\n- PyInstaller-compatible document discovery.\n- Embedded fallback Markdown content when external files are not found.\n\n### Improved\n\n- The app can now ship with its own README and version history as part of the Windows `.exe` build.\n- The app searches for documentation beside the `.py` or `.exe`, inside PyInstaller resources, and in `%APPDATA%`.\n\n### Build Notes\n\nWhen creating the `.exe`, include Markdown files using `--add-data`:\n\n```powershell\npyinstaller --onefile --windowed `\n  --add-binary "plink.exe;." `\n  --add-data "README_Embedded_SSH_Launcher.md;." `\n  --add-data "VERSION_HISTORY_Embedded_SSH_Launcher.md;." `\n  SSH_Console_Launcher_v1_3_8.py\n```\n\n---\n\n## v1.3.8 - Smart Grid Split Layouts\n\n### Fixed\n\n- Open 3 Split no longer creates a long single-line layout.\n- Open 4 Split no longer creates four narrow vertical panes.\n\n### Added / Improved\n\n- Open 3 Split now creates two panes on the top row and one full-width pane on the bottom row.\n- Open 4 Split now creates a 2 x 2 square grid.\n- Manual Vertical Split and Horizontal Split actions still work and can override the auto-grid layout.\n- Pane cleanup was adjusted to work with the new grid layout system.\n\n\n---\n\n# Current Stable Version\n\n```text\nv1.3.8\n```\n\n---\n\n# Full Version Summary\n\n| Version | Summary |\n|---|---|\n| v1.0 | Initial embedded SSH GUI with saved profiles and basic console opening |\n| v1.1 | Tab rename, tab close, reconnect |\n| v1.2 | Quick Commands |\n| v1.3 | Modern CustomTkinter UI refresh |\n| v1.3.1 | Fixed CustomTkinter scrollable sidebar crash |\n| v1.3.2 | Safer tab close handling |\n| v1.3.3 | Full tab destruction fix and ANSI color support |\n| v1.3.4 | Connection status indicator |\n| v1.3.5 | High-contrast terminal color fix |\n| v1.3.6 | Focus, close, toolbar, and quick command behavior fixes |\n| v1.3.7 | Built-in README and version history viewer |\n',
+}
+
+
+def app_base_dir() -> Path:
+    """Return the folder beside the script or beside the frozen .exe."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def pyinstaller_resource_dir() -> Path | None:
+    """Return PyInstaller's temporary resource dir when running as a one-file .exe."""
+    resource_dir = getattr(sys, "_MEIPASS", None)
+    if resource_dir:
+        return Path(resource_dir)
+    return None
+
+
+def find_document_path(filename: str) -> Path | None:
+    """Find a bundled or external documentation file."""
+    candidates = [
+        app_base_dir() / filename,
+        CONFIG_DIR / filename,
+    ]
+
+    resource_dir = pyinstaller_resource_dir()
+    if resource_dir is not None:
+        candidates.insert(1, resource_dir / filename)
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    return None
+
+
+def load_document_text(filename: str) -> tuple[str, str]:
+    """Load Markdown text and return (text, source_description)."""
+    path = find_document_path(filename)
+    if path is not None:
+        try:
+            return path.read_text(encoding="utf-8"), str(path)
+        except UnicodeDecodeError:
+            return path.read_text(encoding="latin-1"), str(path)
+        except Exception as exc:
+            fallback = EMBEDDED_DOCUMENTS.get(filename, "")
+            return fallback or f"# Documentation Error\n\nCould not read {filename}.\n\n{exc}", f"embedded fallback after read error: {exc}"
+
+    fallback = EMBEDDED_DOCUMENTS.get(filename, "")
+    if fallback:
+        return fallback, "embedded fallback"
+
+    return (
+        f"# Missing Documentation\n\nThe file `{filename}` was not found.\n\n"
+        "Expected locations:\n\n"
+        f"- `{app_base_dir() / filename}`\n"
+        f"- `{CONFIG_DIR / filename}`\n"
+        "- PyInstaller bundled resource folder when packaged as an `.exe`\n",
+        "missing",
+    )
+
+
+def write_embedded_docs_to_config() -> None:
+    """Ensure users can inspect documentation files in the config folder."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    for filename, content in EMBEDDED_DOCUMENTS.items():
+        path = CONFIG_DIR / filename
+        if not path.exists():
+            try:
+                path.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
+
+@dataclass
+class SSHProfile:
+    name: str
+    host: str
+    user: str
+    port: int = 22
+
+
+@dataclass
+class QuickCommand:
+    name: str
+    command: str
+
+
+class ProfileStore:
+    @staticmethod
+    def load() -> list[SSHProfile]:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        if not CONFIG_FILE.exists():
+            return []
+
+        try:
+            raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            return [SSHProfile(**item) for item in raw]
+        except Exception:
+            return []
+
+    @staticmethod
+    def save(profiles: list[SSHProfile]) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(
+            json.dumps([asdict(profile) for profile in profiles], indent=2),
+            encoding="utf-8",
+        )
+
+
+class CommandStore:
+    @staticmethod
+    def default_commands() -> list[QuickCommand]:
+        return [
+            QuickCommand("htop", "htop"),
+            QuickCommand("web2py folder", "cd /home/www-data/web2py/"),
+            QuickCommand("tail web2py.log", "tail -f web2py.log"),
+            QuickCommand("uwsgitop", "sudo uwsgitop /tmp/stats.socket"),
+            QuickCommand("clear", "clear"),
+        ]
+
+    @staticmethod
+    def load() -> list[QuickCommand]:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        if not COMMANDS_FILE.exists():
+            commands = CommandStore.default_commands()
+            CommandStore.save(commands)
+            return commands
+
+        try:
+            raw = json.loads(COMMANDS_FILE.read_text(encoding="utf-8"))
+            commands = [QuickCommand(**item) for item in raw]
+
+            if not commands:
+                commands = CommandStore.default_commands()
+                CommandStore.save(commands)
+
+            return commands
+        except Exception:
+            commands = CommandStore.default_commands()
+            CommandStore.save(commands)
+            return commands
+
+    @staticmethod
+    def save(commands: list[QuickCommand]) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        COMMANDS_FILE.write_text(
+            json.dumps([asdict(command) for command in commands], indent=2),
+            encoding="utf-8",
+        )
+
+
+class PasswordStore:
+    @staticmethod
+    def key(profile_name: str) -> str:
+        return profile_name
+
+    @staticmethod
+    def save(profile_name: str, password: str) -> None:
+        if keyring is None:
+            raise RuntimeError("keyring package is not installed")
+
+        keyring.set_password(SERVICE_NAME, PasswordStore.key(profile_name), password)
+
+    @staticmethod
+    def get(profile_name: str) -> str | None:
+        if keyring is None:
+            return None
+
+        try:
+            return keyring.get_password(SERVICE_NAME, PasswordStore.key(profile_name))
+        except Exception:
+            return None
+
+    @staticmethod
+    def delete(profile_name: str) -> None:
+        if keyring is None:
+            return
+
+        try:
+            keyring.delete_password(SERVICE_NAME, PasswordStore.key(profile_name))
+        except Exception:
+            pass
+
+
+def ask_text(
+    parent: tk.Widget,
+    title: str,
+    label: str,
+    initial_value: str = "",
+    password: bool = False,
+) -> str | None:
+    dialog = ctk.CTkToplevel(parent) if ctk is not None else tk.Toplevel(parent)
+    dialog.title(title)
+    dialog.geometry("460x180")
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    dialog.grab_set()
+
+    if ctk is not None:
+        dialog.configure(fg_color=BG)
+
+        frame = ctk.CTkFrame(dialog, fg_color=PANEL, corner_radius=16)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            frame,
+            text=label,
+            text_color=TEXT,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        value_var = tk.StringVar(value=initial_value)
+        entry = ctk.CTkEntry(
+            frame,
+            textvariable=value_var,
+            show="*" if password else "",
+            fg_color=CARD,
+            border_color=ACCENT,
+            text_color=TEXT,
+            height=36,
+        )
+        entry.pack(fill="x", padx=16, pady=(0, 14))
+
+        result: dict[str, str | None] = {"value": None}
+
+        button_row = ctk.CTkFrame(frame, fg_color="transparent")
+        button_row.pack(fill="x", padx=16, pady=(0, 16))
+
+        def submit() -> None:
+            result["value"] = value_var.get()
+            dialog.destroy()
+
+        def cancel() -> None:
+            result["value"] = None
+            dialog.destroy()
+
+        ctk.CTkButton(
+            button_row,
+            text="Cancel",
+            command=cancel,
+            fg_color=CARD,
+            hover_color=CARD_HOVER,
+            text_color=TEXT,
+            width=100,
+        ).pack(side="right", padx=(8, 0))
+
+        ctk.CTkButton(
+            button_row,
+            text="OK",
+            command=submit,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            width=100,
+        ).pack(side="right")
+
+        entry.bind("<Return>", lambda _event: submit())
+        entry.focus_set()
+        dialog.wait_window()
+        return result["value"]
+
+    value = simpledialog.askstring(title, label, initialvalue=initial_value, show="*" if password else None)
+    dialog.destroy()
+    return value
+
+
+class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
+    def __init__(self, parent: tk.Widget, initial_file: str = DOC_README_FILE):
+        super().__init__(parent)
+        self.parent = parent
+        self.current_file = initial_file
+        self.current_text = ""
+        self.current_source = ""
+        self.search_var = tk.StringVar()
+
+        self.title("Documentation")
+        self.geometry("1050x760")
+        self.minsize(820, 560)
+        self.transient(parent)
+
+        if ctk is not None:
+            self.configure(fg_color=BG)
+
+        self._build_ui()
+        self.load_document(initial_file)
+        self.focus()
+
+    def _build_ui(self) -> None:
+        if ctk is not None:
+            root = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        else:
+            root = ttk.Frame(self)
+        root.pack(fill="both", expand=True)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(2, weight=1)
+
+        if ctk is not None:
+            header = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=0)
+            title = ctk.CTkLabel(
+                header,
+                text="Documentation",
+                text_color=TEXT,
+                font=ctk.CTkFont(size=20, weight="bold"),
+            )
+            subtitle = ctk.CTkLabel(
+                header,
+                text="README and version history rendered inside the app",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            )
+        else:
+            header = ttk.Frame(root)
+            title = ttk.Label(header, text="Documentation", font=("Segoe UI", 16, "bold"))
+            subtitle = ttk.Label(header, text="README and version history rendered inside the app")
+
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(1, weight=1)
+        title.grid(row=0, column=0, sticky="w", padx=16, pady=(12, 0))
+        subtitle.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 12))
+
+        if ctk is not None:
+            toolbar = ctk.CTkFrame(root, fg_color=PANEL_2, corner_radius=12)
+        else:
+            toolbar = ttk.Frame(root)
+        toolbar.grid(row=1, column=0, sticky="ew", padx=12, pady=10)
+        toolbar.grid_columnconfigure(5, weight=1)
+
+        self._doc_button(toolbar, "README", lambda: self.load_document(DOC_README_FILE), ACCENT).grid(row=0, column=0, padx=(10, 4), pady=10)
+        self._doc_button(toolbar, "Version History", lambda: self.load_document(DOC_VERSION_FILE), ACCENT).grid(row=0, column=1, padx=4, pady=10)
+        self._doc_button(toolbar, "Reload", self.reload_document, CARD_HOVER).grid(row=0, column=2, padx=4, pady=10)
+        self._doc_button(toolbar, "Open Docs Folder", self.open_docs_folder, CARD_HOVER).grid(row=0, column=3, padx=4, pady=10)
+        self._doc_button(toolbar, "Export Docs", self.export_docs_to_config, SUCCESS).grid(row=0, column=4, padx=4, pady=10)
+
+        if ctk is not None:
+            search = ctk.CTkEntry(
+                toolbar,
+                textvariable=self.search_var,
+                placeholder_text="Search in document...",
+                fg_color=PANEL,
+                border_color="#334155",
+                text_color=TEXT,
+                height=34,
+                corner_radius=10,
+            )
+        else:
+            search = ttk.Entry(toolbar, textvariable=self.search_var)
+        search.grid(row=0, column=5, sticky="ew", padx=(12, 4), pady=10)
+        search.bind("<Return>", lambda _event: self.highlight_search())
+        self._doc_button(toolbar, "Search", self.highlight_search, WARNING).grid(row=0, column=6, padx=(4, 10), pady=10)
+
+        body = ttk.Frame(root)
+        body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+
+        self.text = tk.Text(
+            body,
+            wrap="word",
+            bg="#0b1220",
+            fg=TEXT,
+            insertbackground=TEXT,
+            selectbackground="#334155",
+            font=("Segoe UI", 11),
+            padx=24,
+            pady=18,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground="#334155",
+        )
+        self.text.grid(row=0, column=0, sticky="nsew")
+
+        y_scroll = ttk.Scrollbar(body, orient="vertical", command=self.text.yview)
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        self.text.configure(yscrollcommand=y_scroll.set)
+
+        self.status_var = tk.StringVar(value="Ready")
+        if ctk is not None:
+            status = ctk.CTkLabel(root, textvariable=self.status_var, text_color=MUTED, font=ctk.CTkFont(size=11))
+        else:
+            status = ttk.Label(root, textvariable=self.status_var)
+        status.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+
+        self.configure_markdown_tags()
+
+    def _doc_button(self, parent: tk.Widget, text: str, command, color: str):
+        if ctk is not None:
+            return ctk.CTkButton(
+                parent,
+                text=text,
+                command=command,
+                fg_color=color,
+                hover_color=CARD_HOVER if color in {CARD, CARD_HOVER} else color,
+                height=34,
+                corner_radius=10,
+            )
+        return ttk.Button(parent, text=text, command=command)
+
+    def configure_markdown_tags(self) -> None:
+        self.text.tag_configure("h1", font=("Segoe UI", 22, "bold"), foreground="#ffffff", spacing1=14, spacing3=10)
+        self.text.tag_configure("h2", font=("Segoe UI", 18, "bold"), foreground="#dbeafe", spacing1=14, spacing3=8)
+        self.text.tag_configure("h3", font=("Segoe UI", 15, "bold"), foreground="#bfdbfe", spacing1=10, spacing3=6)
+        self.text.tag_configure("normal", font=("Segoe UI", 11), foreground=TEXT, spacing1=2, spacing3=5)
+        self.text.tag_configure("muted", foreground=MUTED)
+        self.text.tag_configure("bullet", lmargin1=32, lmargin2=48, foreground=TEXT, spacing3=3)
+        self.text.tag_configure("code", font=("Cascadia Mono", 10), foreground="#e2e8f0", background="#111827", lmargin1=18, lmargin2=18, spacing1=3, spacing3=3)
+        self.text.tag_configure("inline_code", font=("Cascadia Mono", 10), foreground="#fef08a")
+        self.text.tag_configure("rule", foreground="#475569", spacing1=8, spacing3=8)
+        self.text.tag_configure("table", font=("Cascadia Mono", 10), foreground="#d1d5db", background="#111827", spacing1=2, spacing3=2)
+        self.text.tag_configure("quote", foreground="#cbd5e1", background="#172033", lmargin1=20, lmargin2=30, spacing1=4, spacing3=4)
+        self.text.tag_configure("search", background="#facc15", foreground="#111827")
+
+    def load_document(self, filename: str) -> None:
+        self.current_file = filename
+        text, source = load_document_text(filename)
+        self.current_text = text
+        self.current_source = source
+        self.render_markdown(text)
+        self.status_var.set(f"Showing {filename} | Source: {source}")
+
+    def reload_document(self) -> None:
+        self.load_document(self.current_file)
+
+    def render_markdown(self, markdown_text: str) -> None:
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+
+        in_code = False
+        code_buffer: list[str] = []
+
+        def flush_code() -> None:
+            if code_buffer:
+                self.text.insert("end", "\n".join(code_buffer).rstrip() + "\n", "code")
+                code_buffer.clear()
+
+        for raw_line in markdown_text.splitlines():
+            line = raw_line.rstrip("\n")
+
+            if line.strip().startswith("```"):
+                if in_code:
+                    flush_code()
+                    in_code = False
+                else:
+                    in_code = True
+                continue
+
+            if in_code:
+                code_buffer.append(line)
+                continue
+
+            stripped = line.strip()
+            if not stripped:
+                self.text.insert("end", "\n", "normal")
+                continue
+
+            if stripped == "---" or stripped.startswith("***"):
+                self.text.insert("end", "─" * 90 + "\n", "rule")
+                continue
+
+            if stripped.startswith("### "):
+                self.text.insert("end", stripped[4:] + "\n", "h3")
+            elif stripped.startswith("## "):
+                self.text.insert("end", stripped[3:] + "\n", "h2")
+            elif stripped.startswith("# "):
+                self.text.insert("end", stripped[2:] + "\n", "h1")
+            elif stripped.startswith(">"):
+                self.text.insert("end", stripped.lstrip("> ") + "\n", "quote")
+            elif stripped.startswith("- ") or stripped.startswith("* "):
+                self.text.insert("end", "• " + stripped[2:] + "\n", "bullet")
+            elif re.match(r"^\d+\.\s+", stripped):
+                self.text.insert("end", stripped + "\n", "bullet")
+            elif stripped.startswith("|") and stripped.endswith("|"):
+                self.text.insert("end", stripped + "\n", "table")
+            else:
+                self.insert_inline_markdown(stripped + "\n")
+
+        if in_code:
+            flush_code()
+
+        self.text.configure(state="disabled")
+        self.text.see("1.0")
+
+    def insert_inline_markdown(self, text: str) -> None:
+        # Minimal inline rendering for backtick code and bold markers.
+        pos = 0
+        pattern = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*)")
+        for match in pattern.finditer(text):
+            if match.start() > pos:
+                self.text.insert("end", text[pos:match.start()], "normal")
+            token = match.group(0)
+            if token.startswith("`"):
+                self.text.insert("end", token.strip("`"), "inline_code")
+            elif token.startswith("**"):
+                self.text.insert("end", token.strip("*"), "h3")
+            pos = match.end()
+        if pos < len(text):
+            self.text.insert("end", text[pos:], "normal")
+
+    def highlight_search(self) -> None:
+        self.text.configure(state="normal")
+        self.text.tag_remove("search", "1.0", "end")
+        query = self.search_var.get().strip()
+        if not query:
+            self.text.configure(state="disabled")
+            return
+
+        start = "1.0"
+        count = 0
+        while True:
+            index = self.text.search(query, start, stopindex="end", nocase=True)
+            if not index:
+                break
+            end = f"{index}+{len(query)}c"
+            self.text.tag_add("search", index, end)
+            if count == 0:
+                self.text.see(index)
+            count += 1
+            start = end
+        self.text.configure(state="disabled")
+        self.status_var.set(f"Found {count} match(es) for: {query}")
+
+    def open_docs_folder(self) -> None:
+        path = find_document_path(self.current_file)
+        folder = path.parent if path is not None else app_base_dir()
+        try:
+            os.startfile(folder)  # type: ignore[attr-defined]
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Could not open documentation folder.\n\n{exc}")
+
+    def export_docs_to_config(self) -> None:
+        write_embedded_docs_to_config()
+        messagebox.showinfo(APP_NAME, f"Documentation exported to:\n\n{CONFIG_DIR}")
+        self.status_var.set(f"Documentation exported to {CONFIG_DIR}")
+
+
+class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
+    def __init__(
+        self,
+        master: tk.Widget,
+        profile: SSHProfile,
+        plink_path: str,
+        password: str | None,
+    ):
+        if ctk is not None:
+            super().__init__(master, fg_color=TERMINAL_BG, corner_radius=12)
+        else:
+            super().__init__(master)
+
+        self.profile = profile
+        self.plink_path = plink_path
+        self.password = password or ""
+
+        self.proc = None
+        self.reader_thread: threading.Thread | None = None
+        self.output_queue: queue.Queue[object] = queue.Queue()
+
+        self.alive = False
+        self.sent_password = False
+        self.active = False
+        self.close_callback = None
+        self.activate_callback = None
+
+        self.flush_after_id: str | None = None
+        self.status_after_id: str | None = None
+
+        self.term_columns = 140
+        self.term_rows = 42
+
+        self.screen = None
+        self.stream = None
+
+        self.header = None
+        self.title_label = None
+        self.status_label = None
+        self.connection_state = "disconnected"
+        self.style_tag_cache: dict[tuple[str, str, bool, bool], str] = {}
+
+        self._build_ui()
+        self.reset_terminal_screen()
+        self.start_process()
+        self.schedule_flush()
+        self.schedule_connection_check()
+
+    def _build_ui(self) -> None:
+        if ctk is not None:
+            self.header = ctk.CTkFrame(self, fg_color=PANEL_2, corner_radius=10)
+            self.header.pack(fill="x", padx=4, pady=(4, 2))
+
+            self.title_label = ctk.CTkLabel(
+                self.header,
+                text=f"{self.profile.name}  {self.profile.user}@{self.profile.host}:{self.profile.port}",
+                text_color=TEXT,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            )
+            self.title_label.pack(side="left", padx=10, pady=6)
+
+            self.status_label = ctk.CTkLabel(
+                self.header,
+                text="● Disconnected",
+                text_color=DISCONNECTED,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            )
+            self.status_label.pack(side="left", padx=(8, 4), pady=6)
+
+            ctk.CTkButton(
+                self.header,
+                text="Close",
+                command=self.request_close,
+                width=70,
+                height=28,
+                fg_color=DANGER,
+                hover_color="#991b1b",
+            ).pack(side="right", padx=(4, 8), pady=6)
+
+            ctk.CTkButton(
+                self.header,
+                text="Reconnect",
+                command=self.reconnect,
+                width=92,
+                height=28,
+                fg_color=WARNING,
+                hover_color="#92400e",
+            ).pack(side="right", padx=4, pady=6)
+
+            ctk.CTkButton(
+                self.header,
+                text="Clear",
+                command=self.clear_remote_console,
+                width=70,
+                height=28,
+                fg_color=CARD,
+                hover_color=CARD_HOVER,
+            ).pack(side="right", padx=4, pady=6)
+
+            ctk.CTkButton(
+                self.header,
+                text="Focus",
+                command=self.focus_terminal,
+                width=70,
+                height=28,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOVER,
+            ).pack(side="right", padx=4, pady=6)
+
+            body = ctk.CTkFrame(self, fg_color=TERMINAL_BG, corner_radius=10)
+            body.pack(fill="both", expand=True, padx=4, pady=(2, 4))
+        else:
+            self.header = ttk.Frame(self)
+            self.header.pack(fill="x")
+
+            self.title_label = ttk.Label(
+                self.header,
+                text=f"{self.profile.name}  {self.profile.user}@{self.profile.host}:{self.profile.port}",
+                font=("Segoe UI", 9, "bold"),
+            )
+            self.title_label.pack(side="left", padx=4)
+
+            self.status_label = ttk.Label(
+                self.header,
+                text="● Disconnected",
+                foreground=DISCONNECTED,
+                font=("Segoe UI", 9, "bold"),
+            )
+            self.status_label.pack(side="left", padx=8)
+
+            ttk.Button(self.header, text="Close", command=self.request_close, width=7).pack(side="right", padx=2)
+            ttk.Button(self.header, text="Reconnect", command=self.reconnect, width=10).pack(side="right", padx=2)
+            ttk.Button(self.header, text="Clear", command=self.clear_remote_console, width=7).pack(side="right", padx=2)
+            ttk.Button(self.header, text="Focus", command=self.focus_terminal, width=7).pack(side="right", padx=2)
+
+            body = ttk.Frame(self)
+            body.pack(fill="both", expand=True)
+
+        self.text = tk.Text(
+            body,
+            wrap="none",
+            undo=False,
+            bg=TERMINAL_BG,
+            fg=TERMINAL_FG,
+            insertbackground=TERMINAL_FG,
+            selectbackground="#334155",
+            font=("Cascadia Mono", 9),
+            state="disabled",
+            padx=6,
+            pady=6,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.text.pack(side="left", fill="both", expand=True)
+
+        y_scroll = ttk.Scrollbar(body, orient="vertical", command=self.text.yview)
+        y_scroll.pack(side="right", fill="y")
+
+        x_scroll = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
+        x_scroll.pack(fill="x")
+
+        self.text.configure(
+            yscrollcommand=y_scroll.set,
+            xscrollcommand=x_scroll.set,
+        )
+
+        self.text.bind("<Button-1>", lambda _event: self.focus_terminal())
+        self.text.bind("<KeyPress>", self.on_key_press)
+        self.text.bind("<Return>", self.on_return)
+        self.text.bind("<BackSpace>", self.on_backspace)
+        self.text.bind("<Delete>", self.on_delete)
+        self.text.bind("<Tab>", self.on_tab_key)
+
+        self.text.bind("<Control-c>", self.on_ctrl_c)
+        self.text.bind("<Control-d>", self.on_ctrl_d)
+        self.text.bind("<Control-v>", self.on_paste)
+        self.text.bind("<<Paste>>", self.on_paste)
+
+        self.text.bind("<Up>", lambda event: self.send_special("\x1b[A", event))
+        self.text.bind("<Down>", lambda event: self.send_special("\x1b[B", event))
+        self.text.bind("<Right>", lambda event: self.send_special("\x1b[C", event))
+        self.text.bind("<Left>", lambda event: self.send_special("\x1b[D", event))
+        self.text.bind("<Home>", lambda event: self.send_special("\x1b[H", event))
+        self.text.bind("<End>", lambda event: self.send_special("\x1b[F", event))
+        self.text.bind("<Prior>", lambda event: self.send_special("\x1b[5~", event))
+        self.text.bind("<Next>", lambda event: self.send_special("\x1b[6~", event))
+
+    def set_connection_state(self, state: str, message: str | None = None) -> None:
+        """Update the visible connection status indicator for this terminal pane."""
+        self.connection_state = state
+
+        if state == "connected":
+            label_text = "● Connected" if message is None else f"● {message}"
+            color = CONNECTED
+        elif state == "connecting":
+            label_text = "● Connecting" if message is None else f"● {message}"
+            color = CONNECTING
+        else:
+            label_text = "● Disconnected" if message is None else f"● {message}"
+            color = DISCONNECTED
+
+        if self.status_label is not None:
+            try:
+                if ctk is not None and isinstance(self.status_label, ctk.CTkLabel):
+                    self.status_label.configure(text=label_text, text_color=color)
+                else:
+                    self.status_label.configure(text=label_text, foreground=color)
+            except Exception:
+                pass
+
+    def mark_disconnected(self, reason: str = "Disconnected") -> None:
+        self.alive = False
+        self.set_connection_state("disconnected", reason)
+
+    def set_active_visual(self, active: bool) -> None:
+        if ctk is None or self.header is None:
+            return
+
+        if active:
+            self.header.configure(fg_color=ACCENT)
+        else:
+            self.header.configure(fg_color=PANEL_2)
+
+    def reset_terminal_screen(self) -> None:
+        self.screen = None
+        self.stream = None
+
+        if pyte is not None:
+            self.screen = pyte.Screen(self.term_columns, self.term_rows)
+            self.stream = pyte.ByteStream(self.screen)
+
+    def clear_terminal_widget(self) -> None:
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.configure(state="disabled")
+
+    def clear_remote_console(self) -> None:
+        self.run_command("clear")
+
+    def focus_terminal(self) -> None:
+        """Mark this pane as the active/focused terminal for quick commands and toolbar actions."""
+        self.active = True
+
+        # Direct callback is more reliable than only relying on Tk virtual events.
+        # This fixes the Focus button and prevents quick commands from going to
+        # the wrong split pane.
+        if callable(self.activate_callback):
+            try:
+                self.activate_callback(self)
+            except Exception:
+                pass
+
+        self.text.configure(state="normal")
+        self.text.focus_set()
+        self.text.mark_set("insert", "end")
+        self.text.configure(state="disabled")
+        self.event_generate("<<TerminalFocused>>", when="tail")
+
+    def start_process(self) -> None:
+        self.set_connection_state("connecting", "Connecting")
+
+        if PtyProcess is None:
+            self.write_local("ERROR: pywinpty is not installed. Run: pip install pywinpty\n")
+            self.set_connection_state("disconnected", "Missing pywinpty")
+            return
+
+        if pyte is None:
+            self.write_local("ERROR: pyte is not installed. Run: pip install pyte\n")
+            self.set_connection_state("disconnected", "Missing pyte")
+            return
+
+        command = [
+            self.plink_path,
+            "-ssh",
+            f"{self.profile.user}@{self.profile.host}",
+            "-P",
+            str(self.profile.port),
+            "-t",
+            "-no-antispoof",
+        ]
+
+        if self.password:
+            command.extend(["-pw", self.password])
+
+        try:
+            self.proc = PtyProcess.spawn(
+                command,
+                dimensions=(self.term_columns, self.term_rows),
+            )
+        except Exception as exc:
+            self.write_local("ERROR starting terminal:\n" + str(exc) + "\n")
+            self.set_connection_state("disconnected", "Start failed")
+            return
+
+        self.alive = True
+        self.set_connection_state("connected", "Connected")
+        self.sent_password = False
+        self.reader_thread = threading.Thread(target=self.read_loop, daemon=True)
+        self.reader_thread.start()
+
+        self.after(1200, self.initialize_remote_terminal)
+
+    def initialize_remote_terminal(self) -> None:
+        if not self.alive:
+            return
+
+        self.send("export TERM=xterm\r")
+        self.send(f"stty rows {self.term_rows} columns {self.term_columns}\r")
+        self.send("stty erase ^?\r")
+        self.send("clear\r")
+
+    def read_loop(self) -> None:
+        while self.alive and self.proc is not None:
+            try:
+                data = self.proc.read(4096)
+
+                if not data:
+                    time.sleep(0.02)
+                    continue
+
+                self.output_queue.put(data)
+            except Exception:
+                if self.alive:
+                    self.output_queue.put(("STATUS", "disconnected", "Disconnected"))
+                    self.output_queue.put("\n[session closed]\n")
+                self.alive = False
+                break
+
+    def schedule_connection_check(self) -> None:
+        if self.status_after_id is not None:
+            try:
+                self.after_cancel(self.status_after_id)
+            except Exception:
+                pass
+
+        self.status_after_id = self.after(2000, self.check_connection_status)
+
+    def check_connection_status(self) -> None:
+        self.status_after_id = None
+
+        if self.proc is None:
+            self.set_connection_state("disconnected", "Disconnected")
+            return
+
+        if not self.alive:
+            self.set_connection_state("disconnected", "Disconnected")
+            return
+
+        try:
+            if hasattr(self.proc, "isalive") and not self.proc.isalive():
+                self.alive = False
+                self.set_connection_state("disconnected", "Disconnected")
+                return
+        except Exception:
+            pass
+
+        self.set_connection_state("connected", "Connected")
+        self.schedule_connection_check()
+
+    def schedule_flush(self) -> None:
+        if self.flush_after_id is not None:
+            try:
+                self.after_cancel(self.flush_after_id)
+            except Exception:
+                pass
+
+        self.flush_after_id = self.after(35, self.flush_output)
+
+    def flush_output(self) -> None:
+        self.flush_after_id = None
+        changed = False
+
+        while True:
+            try:
+                data = self.output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if isinstance(data, tuple) and len(data) >= 3 and data[0] == "STATUS":
+                _kind, state, message = data
+                self.set_connection_state(str(state), str(message))
+                continue
+
+            if not isinstance(data, str):
+                continue
+
+            self.maybe_answer_prompts(data)
+            self.feed_terminal(data)
+            changed = True
+
+        if changed:
+            self.render_screen()
+
+        if self.alive:
+            self.schedule_flush()
+
+    def maybe_answer_prompts(self, data: str) -> None:
+        lower = data.lower()
+
+        if (
+            "store key in cache" in lower
+            or "cache the key" in lower
+            or "the server's host key is not cached" in lower
+            or "continue connecting" in lower
+        ):
+            self.send("y\r")
+            return
+
+        if self.sent_password or not self.password:
+            return
+
+        if "password:" in lower or "password for" in lower:
+            self.send(self.password + "\r")
+            self.sent_password = True
+
+    def feed_terminal(self, data: str) -> None:
+        if self.stream is None or self.screen is None:
+            self.write_local(self.clean_basic_output(data))
+            return
+
+        cleaned = self.prepare_terminal_input(data)
+
+        try:
+            self.stream.feed(cleaned.encode("utf-8", errors="replace"))
+        except Exception:
+            self.write_local(self.clean_basic_output(cleaned))
+
+    def prepare_terminal_input(self, data: str) -> str:
+        data = re.sub(r"\x1b\][^\x07]*(\x07|\x1b\\)", "", data)
+
+        data = data.replace("\x1b(B", "")
+        data = data.replace("\x1b)B", "")
+        data = data.replace("\x1b(0", "")
+        data = data.replace("\x1b)0", "")
+
+        data = data.replace("\x0e", "")
+        data = data.replace("\x0f", "")
+
+        data = data.replace("\x1b[?2004h", "")
+        data = data.replace("\x1b[?2004l", "")
+
+        data = re.sub(r"\x1b\[[0-9 ]+q", "", data)
+
+        return data
+
+    def normalize_pyte_color(self, value: object, *, background: bool = False) -> str:
+        color_name = str(value or "default").replace("-", "").replace("_", "").lower()
+
+        if color_name.startswith("#"):
+            return color_name
+
+        if background:
+            return ANSI_BACKGROUND_MAP.get(color_name, TERMINAL_BG)
+
+        return ANSI_COLOR_MAP.get(color_name, TERMINAL_FG)
+
+    def color_luminance(self, color: str) -> float:
+        """Return perceived luminance for #RRGGBB colors."""
+        try:
+            color = color.strip().lstrip("#")
+            if len(color) != 6:
+                return 255.0
+            red = int(color[0:2], 16)
+            green = int(color[2:4], 16)
+            blue = int(color[4:6], 16)
+            return (0.299 * red) + (0.587 * green) + (0.114 * blue)
+        except Exception:
+            return 255.0
+
+    def improve_terminal_contrast(self, fg: str, bg: str, bold: bool = False) -> str:
+        """
+        htop/uwsgitop often use black or dim gray text for CPU numbers, users,
+        and low-contrast table values. On a real terminal this can still be visible
+        depending on theme. In Tk Text on a pure black background it becomes almost
+        unreadable, so force low-contrast foregrounds to a readable light color.
+        """
+        fg_lum = self.color_luminance(fg)
+        bg_lum = self.color_luminance(bg)
+
+        # If foreground is close to the background or very dark, brighten it.
+        if abs(fg_lum - bg_lum) < 65 or fg_lum < 75:
+            return "#ffffff" if bold else "#e5e7eb"
+
+        return fg
+
+    def get_or_create_text_tag(self, fg: str, bg: str, bold: bool, underline: bool) -> str:
+        key = (fg, bg, bold, underline)
+
+        if key in self.style_tag_cache:
+            return self.style_tag_cache[key]
+
+        tag_name = f"term_style_{len(self.style_tag_cache)}"
+        self.style_tag_cache[key] = tag_name
+
+        font_weight = "bold" if bold else "normal"
+        underline_value = 1 if underline else 0
+
+        self.text.tag_configure(
+            tag_name,
+            foreground=fg,
+            background=bg,
+            font=("Cascadia Mono", 9, font_weight),
+            underline=underline_value,
+        )
+
+        return tag_name
+
+    def render_screen(self) -> None:
+        if self.screen is None:
+            return
+
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+
+        buffer = self.screen.buffer
+        cursor_y = max(0, min(self.screen.cursor.y, self.term_rows - 1))
+        cursor_x = max(0, min(self.screen.cursor.x, self.term_columns - 1))
+
+        for row in range(self.term_rows):
+            line = buffer.get(row, {})
+            current_text: list[str] = []
+            current_tag: str | None = None
+
+            def flush_segment() -> None:
+                nonlocal current_text, current_tag
+
+                if not current_text:
+                    return
+
+                segment = "".join(current_text)
+
+                if current_tag:
+                    self.text.insert("end", segment, current_tag)
+                else:
+                    self.text.insert("end", segment)
+
+                current_text = []
+
+            for col in range(self.term_columns):
+                char = line.get(col)
+
+                if char is None:
+                    data = " "
+                    fg = TERMINAL_FG
+                    bg = TERMINAL_BG
+                    bold = False
+                    underline = False
+                    reverse = False
+                else:
+                    data = getattr(char, "data", " ") or " "
+                    fg = self.normalize_pyte_color(getattr(char, "fg", "default"), background=False)
+                    bg = self.normalize_pyte_color(getattr(char, "bg", "default"), background=True)
+                    bold = bool(getattr(char, "bold", False))
+                    underline = bool(getattr(char, "underscore", False) or getattr(char, "underline", False))
+                    reverse = bool(getattr(char, "reverse", False))
+
+                if reverse:
+                    fg, bg = bg, fg
+
+                fg = self.improve_terminal_contrast(fg, bg, bold)
+
+                if row == cursor_y and col == cursor_x:
+                    data = "█"
+                    fg = "#ffffff"
+                    bg = ACCENT
+                    bold = True
+
+                if len(data) != 1:
+                    data = data[:1] if data else " "
+
+                tag = self.get_or_create_text_tag(fg, bg, bold, underline)
+
+                if tag != current_tag:
+                    flush_segment()
+                    current_tag = tag
+
+                current_text.append(data)
+
+            flush_segment()
+
+            if row < self.term_rows - 1:
+                self.text.insert("end", "\n")
+
+        self.text.configure(state="disabled")
+
+    def write_local(self, data: str) -> None:
+        self.text.configure(state="normal")
+        self.text.insert("end", data)
+        self.text.configure(state="disabled")
+        self.text.see("end")
+
+    def clean_basic_output(self, data: str) -> str:
+        data = data.replace("\r\n", "\n").replace("\r", "\n")
+
+        data = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", data)
+        data = re.sub(r"\x1b\][^\x07]*(\x07|\x1b\\)", "", data)
+
+        data = data.replace("\x1b(B", "")
+        data = data.replace("\x1b)B", "")
+        data = data.replace("\x1b(0", "")
+        data = data.replace("\x1b)0", "")
+        data = data.replace("\x0e", "")
+        data = data.replace("\x0f", "")
+
+        data = data.replace("\x08", "")
+        data = data.replace("\x7f", "")
+
+        data = "".join(
+            ch for ch in data
+            if ch == "\n" or ch == "\t" or ord(ch) >= 32
+        )
+
+        return data
+
+    def send(self, data: str) -> None:
+        if self.proc is None or not self.alive:
+            self.set_connection_state("disconnected", "Disconnected")
+            return
+
+        try:
+            self.proc.write(data)
+        except Exception:
+            self.alive = False
+            self.set_connection_state("disconnected", "Disconnected")
+            self.write_local("\n[write failed; session closed]\n")
+
+    def run_command(self, command: str) -> None:
+        if not command.strip():
+            return
+
+        self.focus_terminal()
+        self.send(command.rstrip() + "\r")
+
+    def reconnect(self) -> None:
+        self.write_local("\n[reconnecting...]\n")
+
+        self.close_process_only()
+        self.clear_queue()
+        self.reset_terminal_screen()
+        self.clear_terminal_widget()
+
+        self.start_process()
+        self.schedule_flush()
+        self.schedule_connection_check()
+        self.focus_terminal()
+
+    def close_process_only(self) -> None:
+        self.alive = False
+
+        if self.flush_after_id is not None:
+            try:
+                self.after_cancel(self.flush_after_id)
+            except Exception:
+                pass
+            self.flush_after_id = None
+
+        if self.status_after_id is not None:
+            try:
+                self.after_cancel(self.status_after_id)
+            except Exception:
+                pass
+            self.status_after_id = None
+
+        try:
+            if self.proc is not None:
+                self.proc.close(force=True)
+        except Exception:
+            pass
+
+        self.proc = None
+        self.set_connection_state("disconnected", "Disconnected")
+
+    def clear_queue(self) -> None:
+        while True:
+            try:
+                self.output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def on_key_press(self, event: tk.Event) -> str | None:
+        if event.keysym in {
+            "Return",
+            "BackSpace",
+            "Delete",
+            "Tab",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Home",
+            "End",
+            "Prior",
+            "Next",
+        }:
+            return None
+
+        if event.char and ord(event.char) >= 32:
+            self.send(event.char)
+            return "break"
+
+        return None
+
+    def on_return(self, _event: tk.Event) -> str:
+        self.send("\r")
+        return "break"
+
+    def on_backspace(self, _event: tk.Event) -> str:
+        self.send("\x7f")
+        return "break"
+
+    def on_delete(self, _event: tk.Event) -> str:
+        self.send("\x1b[3~")
+        return "break"
+
+    def on_tab_key(self, _event: tk.Event) -> str:
+        self.send("\t")
+        return "break"
+
+    def on_ctrl_c(self, _event: tk.Event) -> str:
+        self.send("\x03")
+        return "break"
+
+    def on_ctrl_d(self, _event: tk.Event) -> str:
+        self.send("\x04")
+        return "break"
+
+    def on_paste(self, _event: tk.Event) -> str:
+        try:
+            text = self.clipboard_get()
+        except Exception:
+            return "break"
+
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\n", "\r")
+        self.send(text)
+        return "break"
+
+    def send_special(self, sequence: str, _event: tk.Event) -> str:
+        self.send(sequence)
+        return "break"
+
+    def request_close(self) -> None:
+        if callable(self.close_callback):
+            self.close_callback(self)
+        else:
+            self.close()
+
+    def close(self) -> None:
+        self.close_process_only()
+
+
+class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
+    def __init__(self, master: tk.Widget, app: "EmbeddedSSHLauncher"):
+        if ctk is not None:
+            super().__init__(master, fg_color=BG, corner_radius=0)
+        else:
+            super().__init__(master)
+
+        self.app = app
+        self.orientation = tk.HORIZONTAL
+        self.layout_mode = "horizontal"
+        self.panes: list[EmbeddedTerminal] = []
+        self.active_terminal: EmbeddedTerminal | None = None
+
+        # v1.3.8 change:
+        # The previous version used one linear ttk.PanedWindow. That made 3 and 4
+        # split views appear as long vertical/horizontal strips. A grid-capable
+        # container lets us arrange:
+        #   3 panes = 2 on top, 1 full-width at the bottom
+        #   4 panes = 2 x 2 square layout
+        #
+        # This also keeps all terminal widgets as direct children of one stable
+        # parent, which makes closing/rebuilding layouts much safer.
+        if ctk is not None:
+            self.layout_frame = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        else:
+            self.layout_frame = ttk.Frame(self)
+
+        self.layout_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def add_console(self, profile: SSHProfile) -> None:
+        if len(self.panes) >= MAX_PANES_PER_TAB:
+            messagebox.showwarning(APP_NAME, f"Maximum {MAX_PANES_PER_TAB} consoles per tab.")
+            return
+
+        plink_path = self.app.find_plink()
+
+        if not plink_path:
+            messagebox.showerror(
+                APP_NAME,
+                "plink.exe was not found. Place plink.exe beside this app or install PuTTY and add it to PATH.",
+            )
+            return
+
+        password = PasswordStore.get(profile.name)
+
+        if password is None:
+            password = ask_text(
+                self,
+                APP_NAME,
+                f"Password for {profile.user}@{profile.host}",
+                password=True,
+            )
+
+            if password is None:
+                return
+
+            try:
+                PasswordStore.save(profile.name, password)
+            except Exception:
+                pass
+
+        terminal = EmbeddedTerminal(self.layout_frame, profile, plink_path, password)
+        terminal.close_callback = self.close_console
+        terminal.activate_callback = self.set_active_terminal
+        terminal.bind("<<TerminalFocused>>", lambda _event, t=terminal: self.set_active_terminal(t))
+
+        self.panes.append(terminal)
+        self.apply_layout()
+
+        self.set_active_terminal(terminal)
+        terminal.focus_terminal()
+
+    def set_active_terminal(self, terminal: EmbeddedTerminal) -> None:
+        if self.active_terminal is not None and self.active_terminal is not terminal:
+            self.active_terminal.set_active_visual(False)
+
+        self.active_terminal = terminal
+        self.app.active_tab = self
+        self.app.focused_terminal = terminal
+        terminal.set_active_visual(True)
+
+    def reset_layout_grid(self) -> None:
+        for pane in list(self.panes):
+            try:
+                pane.grid_forget()
+            except Exception:
+                pass
+
+        for column in range(4):
+            try:
+                self.layout_frame.grid_columnconfigure(column, weight=0)
+            except Exception:
+                pass
+
+        for row in range(4):
+            try:
+                self.layout_frame.grid_rowconfigure(row, weight=0)
+            except Exception:
+                pass
+
+    def apply_layout(self) -> None:
+        self.reset_layout_grid()
+
+        pane_count = len(self.panes)
+
+        if pane_count == 0:
+            return
+
+        # Make all grid cells expandable.
+        for column in range(4):
+            self.layout_frame.grid_columnconfigure(column, weight=0)
+
+        for row in range(4):
+            self.layout_frame.grid_rowconfigure(row, weight=0)
+
+        if pane_count == 1:
+            self.layout_frame.grid_columnconfigure(0, weight=1)
+            self.layout_frame.grid_rowconfigure(0, weight=1)
+            self.panes[0].grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+            return
+
+        if self.layout_mode == "grid4" and pane_count >= 4:
+            # 2 x 2 square layout.
+            for row in range(2):
+                self.layout_frame.grid_rowconfigure(row, weight=1)
+
+            for column in range(2):
+                self.layout_frame.grid_columnconfigure(column, weight=1)
+
+            positions = [
+                (0, 0),
+                (0, 1),
+                (1, 0),
+                (1, 1),
+            ]
+
+            for pane, (row, column) in zip(self.panes[:4], positions):
+                pane.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
+
+            return
+
+        if self.layout_mode == "grid3" and pane_count >= 3:
+            # 3-pane layout: two smaller panes on top, one full-width pane below.
+            # This matches the requested workflow: "2 on top and 1 big vertical on the bottom".
+            self.layout_frame.grid_rowconfigure(0, weight=1)
+            self.layout_frame.grid_rowconfigure(1, weight=1)
+            self.layout_frame.grid_columnconfigure(0, weight=1)
+            self.layout_frame.grid_columnconfigure(1, weight=1)
+
+            self.panes[0].grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+            self.panes[1].grid(row=0, column=1, sticky="nsew", padx=3, pady=3)
+            self.panes[2].grid(row=1, column=0, columnspan=2, sticky="nsew", padx=3, pady=3)
+
+            return
+
+        if self.layout_mode == "vertical":
+            # Stack panes top-to-bottom.
+            self.layout_frame.grid_columnconfigure(0, weight=1)
+
+            for index, pane in enumerate(self.panes):
+                self.layout_frame.grid_rowconfigure(index, weight=1)
+                pane.grid(row=index, column=0, sticky="nsew", padx=3, pady=3)
+
+            return
+
+        # Default horizontal layout: panes side-by-side.
+        self.layout_frame.grid_rowconfigure(0, weight=1)
+
+        for index, pane in enumerate(self.panes):
+            self.layout_frame.grid_columnconfigure(index, weight=1)
+            pane.grid(row=0, column=index, sticky="nsew", padx=3, pady=3)
+
+    def set_grid_layout_for_count(self, count: int) -> None:
+        if count == 4:
+            self.layout_mode = "grid4"
+        elif count == 3:
+            self.layout_mode = "grid3"
+        elif count == 2:
+            self.layout_mode = "horizontal"
+        else:
+            self.layout_mode = "horizontal"
+
+        self.apply_layout()
+
+    def set_orientation(self, orientation: str) -> None:
+        self.orientation = orientation
+        self.layout_mode = "horizontal" if orientation == tk.HORIZONTAL else "vertical"
+        self.apply_layout()
+
+    def close_console(self, terminal: EmbeddedTerminal) -> None:
+        """Close one console pane. If it was the last pane, close the tab too."""
+        try:
+            terminal.close()
+        except Exception:
+            pass
+
+        try:
+            terminal.grid_forget()
+        except Exception:
+            pass
+
+        try:
+            terminal.destroy()
+        except Exception:
+            pass
+
+        self.panes = [pane for pane in self.panes if pane is not terminal]
+
+        if self.active_terminal is terminal:
+            self.active_terminal = self.panes[-1] if self.panes else None
+
+        if self.app.focused_terminal is terminal:
+            self.app.focused_terminal = self.active_terminal
+
+        if self.active_terminal is not None:
+            # If a special 3/4-grid loses panes, fall back to a sensible layout.
+            if len(self.panes) < 3 and self.layout_mode in {"grid3", "grid4"}:
+                self.layout_mode = "horizontal"
+
+            self.apply_layout()
+            self.set_active_terminal(self.active_terminal)
+            return
+
+        # If that was the last/only console in the tab, remove the empty tab too.
+        # after(1) lets the button callback finish before the notebook destroys widgets.
+        try:
+            self.after(1, lambda: self.app.close_tab_for_widget(self))
+        except Exception:
+            pass
+
+    def close_active_console(self) -> None:
+        terminal = self.active_terminal
+
+        if terminal is None and self.panes:
+            terminal = self.panes[-1]
+
+        if terminal is None:
+            return
+
+        self.close_console(terminal)
+
+    def reconnect_active_console(self) -> None:
+        terminal = self.active_terminal
+
+        if terminal is None and self.panes:
+            terminal = self.panes[-1]
+
+        if terminal is None:
+            return
+
+        terminal.reconnect()
+
+    def run_command_on_active(self, command: str) -> None:
+        terminal = self.active_terminal
+
+        if terminal is None and self.panes:
+            terminal = self.panes[-1]
+
+        if terminal is None:
+            return
+
+        terminal.run_command(command)
+
+    def clear_active_console(self) -> None:
+        self.run_command_on_active("clear")
+
+    def close_all(self) -> None:
+        for pane in list(self.panes):
+            try:
+                pane.close()
+            except Exception:
+                pass
+
+            try:
+                pane.grid_forget()
+            except Exception:
+                pass
+
+            try:
+                pane.destroy()
+            except Exception:
+                pass
+
+        self.panes.clear()
+        self.active_terminal = None
+
+class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
+    def __init__(self) -> None:
+        if ctk is not None:
+            ctk.set_appearance_mode("dark")
+            ctk.set_default_color_theme("blue")
+            super().__init__()
+            self.configure(fg_color=BG)
+        else:
+            super().__init__()
+
+        self.title(APP_NAME)
+        self.geometry("1440x820")
+        self.minsize(1100, 680)
+
+        write_embedded_docs_to_config()
+
+        self.profiles: list[SSHProfile] = ProfileStore.load()
+        self.commands: list[QuickCommand] = CommandStore.load()
+
+        self.selected_profile_index: int | None = None
+        self.selected_command_index: int | None = None
+
+        self.tab_counter = 0
+        self.active_tab: ConsoleTab | None = None
+        self.focused_terminal: EmbeddedTerminal | None = None
+
+        # Safe tab close tracking.
+        # This prevents tabs from closing when clicking/focusing/selecting terminal text.
+        self.pending_tab_close_id: str | None = None
+        self.pending_tab_close_press_xy: tuple[int, int] | None = None
+
+        self.profile_buttons: list[ctk.CTkButton] = []
+        self.command_buttons: list[ctk.CTkButton] = []
+
+        self._setup_styles()
+        self._build_ui()
+        self.refresh_profiles()
+        self.refresh_commands()
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _setup_styles(self) -> None:
+        style = ttk.Style(self)
+
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure(
+            "TNotebook",
+            background=BG,
+            borderwidth=0,
+            tabmargins=[4, 4, 4, 0],
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=PANEL_2,
+            foreground=TEXT,
+            padding=[14, 8],
+            borderwidth=0,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", ACCENT), ("active", CARD_HOVER)],
+            foreground=[("selected", "#ffffff"), ("active", "#ffffff")],
+        )
+        style.configure(
+            "TPanedwindow",
+            background=BG,
+            borderwidth=0,
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=PANEL_2,
+            troughcolor=BG,
+            arrowcolor=TEXT,
+            borderwidth=0,
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background=PANEL_2,
+            troughcolor=BG,
+            arrowcolor=TEXT,
+            borderwidth=0,
+        )
+
+    def _build_ui(self) -> None:
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        self.topbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0) if ctk is not None else ttk.Frame(self)
+        self.topbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.topbar.grid_columnconfigure(1, weight=1)
+
+        self.sidebar = ctk.CTkScrollableFrame(
+            self,
+            fg_color=PANEL,
+            corner_radius=0,
+            width=320,
+        ) if ctk is not None else ttk.Frame(self)
+
+        self.sidebar.grid(row=1, column=0, sticky="nsw")
+
+        if ctk is not None:
+            self.sidebar.configure(width=320)
+        else:
+            self.sidebar.grid_propagate(False)
+
+        self.main = ctk.CTkFrame(
+            self,
+            fg_color=BG,
+            corner_radius=0,
+        ) if ctk is not None else ttk.Frame(self)
+        self.main.grid(row=1, column=1, sticky="nsew")
+        self.main.grid_columnconfigure(0, weight=1)
+        self.main.grid_rowconfigure(1, weight=1)
+
+        self.statusbar = ctk.CTkFrame(
+            self,
+            fg_color=PANEL,
+            corner_radius=0,
+            height=32,
+        ) if ctk is not None else ttk.Frame(self)
+        self.statusbar.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        self._build_topbar()
+        self._build_sidebar()
+        self._build_main()
+        self._build_statusbar()
+
+    def _build_topbar(self) -> None:
+        if ctk is not None:
+            ctk.CTkLabel(
+                self.topbar,
+                text="Embedded SSH Launcher",
+                text_color=TEXT,
+                font=ctk.CTkFont(size=18, weight="bold"),
+            ).grid(row=0, column=0, padx=18, pady=12, sticky="w")
+
+            ctk.CTkLabel(
+                self.topbar,
+                text="Modern SSH workspace with tabs, split panes, and quick commands",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).grid(row=0, column=1, padx=8, pady=12, sticky="w")
+
+            button_bar = ctk.CTkFrame(self.topbar, fg_color="transparent")
+            button_bar.grid(row=0, column=2, padx=14, pady=8, sticky="e")
+
+            self._toolbar_button(button_bar, "New Tab", self.open_new_tab, ACCENT).pack(side="left", padx=4)
+            self._toolbar_button(button_bar, "Split", self.split_current_tab, CARD).pack(side="left", padx=4)
+            self._toolbar_button(button_bar, "Reconnect", self.reconnect_active_console, WARNING).pack(side="left", padx=4)
+            self._toolbar_button(button_bar, "Clear", self.clear_focused_console, CARD).pack(side="left", padx=4)
+            self._toolbar_button(button_bar, "Close", self.close_active_console, DANGER).pack(side="left", padx=4)
+        else:
+            ttk.Label(self.topbar, text="Embedded SSH Launcher").pack(side="left", padx=10)
+
+    def _toolbar_button(self, parent: tk.Widget, text: str, command, color: str):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=92,
+            height=34,
+            fg_color=color,
+            hover_color=CARD_HOVER if color == CARD else color,
+            corner_radius=10,
+        )
+
+    def _build_sidebar(self) -> None:
+        self._sidebar_title("Profiles")
+
+        self.profile_buttons_frame = ctk.CTkFrame(
+            self.sidebar,
+            fg_color="transparent",
+        ) if ctk is not None else ttk.Frame(self.sidebar)
+        self.profile_buttons_frame.pack(fill="x", padx=12, pady=(6, 12))
+
+        self._sidebar_title("Connection")
+
+        self.profile_form = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Connection")
+        self.profile_form.pack(fill="x", padx=12, pady=(0, 14))
+
+        self.name_var = tk.StringVar()
+        self.host_var = tk.StringVar()
+        self.user_var = tk.StringVar()
+        self.port_var = tk.StringVar(value="22")
+        self.password_var = tk.StringVar()
+
+        self.name_entry = self._form_row(self.profile_form, "Name", self.name_var)
+        self.host_entry = self._form_row(self.profile_form, "Host/IP", self.host_var)
+        self.user_entry = self._form_row(self.profile_form, "User", self.user_var)
+        self.port_entry = self._form_row(self.profile_form, "Port", self.port_var)
+        self.password_entry = self._form_row(self.profile_form, "Password", self.password_var, show="*")
+
+        if ctk is not None:
+            row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=(8, 12))
+
+            ctk.CTkButton(
+                row,
+                text="Save",
+                command=self.save_profile,
+                fg_color=SUCCESS,
+                hover_color="#15803d",
+                height=34,
+                corner_radius=10,
+            ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+            ctk.CTkButton(
+                row,
+                text="New",
+                command=self.clear_form,
+                fg_color=CARD_HOVER,
+                hover_color="#475569",
+                height=34,
+                corner_radius=10,
+            ).pack(side="left", fill="x", expand=True, padx=4)
+
+            ctk.CTkButton(
+                row,
+                text="Delete",
+                command=self.delete_profile,
+                fg_color=DANGER,
+                hover_color="#991b1b",
+                height=34,
+                corner_radius=10,
+            ).pack(side="left", fill="x", expand=True, padx=(4, 0))
+        else:
+            ttk.Button(self.profile_form, text="Save", command=self.save_profile).pack(fill="x")
+            ttk.Button(self.profile_form, text="New", command=self.clear_form).pack(fill="x")
+            ttk.Button(self.profile_form, text="Delete", command=self.delete_profile).pack(fill="x")
+
+        self._sidebar_title("Open Console")
+
+        self.open_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Open Console")
+        self.open_panel.pack(fill="x", padx=12, pady=(0, 14))
+
+        self._side_button(self.open_panel, "New Tab", self.open_new_tab, ACCENT)
+        self._side_button(self.open_panel, "Split Current Tab", self.split_current_tab, CARD_HOVER)
+        self._side_button(self.open_panel, "Open 2 Split", lambda: self.open_n_split(2), CARD_HOVER)
+        self._side_button(self.open_panel, "Open 3 Split", lambda: self.open_n_split(3), CARD_HOVER)
+        self._side_button(self.open_panel, "Open 4 Split", lambda: self.open_n_split(4), CARD_HOVER)
+
+        self._sidebar_title("Layout / Session")
+
+        self.session_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Layout / Session")
+        self.session_panel.pack(fill="x", padx=12, pady=(0, 14))
+
+        self._side_button(self.session_panel, "Vertical Split", lambda: self.set_active_orientation(tk.HORIZONTAL), CARD_HOVER)
+        self._side_button(self.session_panel, "Horizontal Split", lambda: self.set_active_orientation(tk.VERTICAL), CARD_HOVER)
+        self._side_button(self.session_panel, "Rename Current Tab", self.rename_current_tab, CARD_HOVER)
+        self._side_button(self.session_panel, "Reconnect Selected Console", self.reconnect_active_console, WARNING)
+        self._side_button(self.session_panel, "Clear Console", self.clear_focused_console, CARD_HOVER)
+        self._side_button(self.session_panel, "Close Selected Console", self.close_active_console, DANGER)
+        self._side_button(self.session_panel, "Close Current Tab", self.close_current_tab, DANGER)
+
+        self._sidebar_title("Quick Commands")
+
+        self.commands_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Quick Commands")
+        self.commands_panel.pack(fill="x", padx=12, pady=(0, 14))
+
+        self.command_buttons_frame = ctk.CTkFrame(
+            self.commands_panel,
+            fg_color="transparent",
+        ) if ctk is not None else ttk.Frame(self.commands_panel)
+        self.command_buttons_frame.pack(fill="x", padx=10, pady=(10, 8))
+
+        if ctk is not None:
+            command_tools = ctk.CTkFrame(self.commands_panel, fg_color="transparent")
+            command_tools.pack(fill="x", padx=10, pady=(0, 10))
+
+            ctk.CTkButton(
+                command_tools,
+                text="Add",
+                command=self.add_command,
+                fg_color=SUCCESS,
+                hover_color="#15803d",
+                height=32,
+                width=70,
+                corner_radius=10,
+            ).pack(side="left", expand=True, fill="x", padx=(0, 3))
+
+            ctk.CTkButton(
+                command_tools,
+                text="Edit",
+                command=self.edit_command,
+                fg_color=WARNING,
+                hover_color="#92400e",
+                height=32,
+                width=70,
+                corner_radius=10,
+            ).pack(side="left", expand=True, fill="x", padx=3)
+
+            ctk.CTkButton(
+                command_tools,
+                text="Delete",
+                command=self.delete_command,
+                fg_color=DANGER,
+                hover_color="#991b1b",
+                height=32,
+                width=70,
+                corner_radius=10,
+            ).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        else:
+            ttk.Button(self.commands_panel, text="Add", command=self.add_command).pack(fill="x")
+            ttk.Button(self.commands_panel, text="Edit", command=self.edit_command).pack(fill="x")
+            ttk.Button(self.commands_panel, text="Delete", command=self.delete_command).pack(fill="x")
+
+        self._sidebar_title("Documentation")
+
+        self.docs_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Documentation")
+        self.docs_panel.pack(fill="x", padx=12, pady=(0, 14))
+
+        self._side_button(self.docs_panel, "Open Documentation", self.open_documentation, ACCENT)
+        self._side_button(self.docs_panel, "README", lambda: self.open_documentation(DOC_README_FILE), CARD_HOVER)
+        self._side_button(self.docs_panel, "Version History", lambda: self.open_documentation(DOC_VERSION_FILE), CARD_HOVER)
+
+        self._sidebar_title("Tools")
+
+        self.tools_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Tools")
+        self.tools_panel.pack(fill="x", padx=12, pady=(0, 20))
+
+        self._side_button(self.tools_panel, "Check Requirements", self.check_requirements, CARD_HOVER)
+        self._side_button(self.tools_panel, "Open Config Folder", self.open_config_folder, CARD_HOVER)
+
+    def _sidebar_title(self, text: str) -> None:
+        if ctk is not None:
+            ctk.CTkLabel(
+                self.sidebar,
+                text=text,
+                text_color=TEXT,
+                font=ctk.CTkFont(size=15, weight="bold"),
+            ).pack(anchor="w", padx=14, pady=(12, 2))
+        else:
+            ttk.Label(self.sidebar, text=text).pack(anchor="w")
+
+    def _form_row(
+        self,
+        parent: tk.Widget,
+        label: str,
+        variable: tk.StringVar,
+        show: str | None = None,
+    ):
+        if ctk is not None:
+            ctk.CTkLabel(
+                parent,
+                text=label,
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+
+            entry = ctk.CTkEntry(
+                parent,
+                textvariable=variable,
+                show=show or "",
+                fg_color=PANEL,
+                border_color="#374151",
+                text_color=TEXT,
+                height=34,
+                corner_radius=10,
+            )
+            entry.pack(fill="x", padx=12, pady=(0, 2))
+            return entry
+
+        ttk.Label(parent, text=label).pack(anchor="w")
+        entry = ttk.Entry(parent, textvariable=variable, show=show)
+        entry.pack(fill="x")
+        return entry
+
+    def _side_button(self, parent: tk.Widget, text: str, command, color: str) -> None:
+        if ctk is not None:
+            ctk.CTkButton(
+                parent,
+                text=text,
+                command=command,
+                fg_color=color,
+                hover_color=CARD_HOVER if color in {CARD, CARD_HOVER} else color,
+                height=34,
+                corner_radius=10,
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=4)
+        else:
+            ttk.Button(parent, text=text, command=command).pack(fill="x")
+
+    def _build_main(self) -> None:
+        hint_panel = ctk.CTkFrame(
+            self.main,
+            fg_color=PANEL,
+            corner_radius=14,
+        ) if ctk is not None else ttk.Frame(self.main)
+        hint_panel.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 8))
+        hint_panel.grid_columnconfigure(0, weight=1)
+
+        if ctk is not None:
+            ctk.CTkLabel(
+                hint_panel,
+                text="Double-click a profile to open SSH. Click a quick command to run it in the focused console. Click × on a tab to close it.",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).grid(row=0, column=0, padx=14, pady=10, sticky="w")
+        else:
+            ttk.Label(
+                hint_panel,
+                text="Double-click a profile to open SSH. Click a quick command to run it in the focused console. Click × on a tab to close it.",
+            ).grid(row=0, column=0, padx=10, pady=10, sticky="w")
+
+        self.notebook = ttk.Notebook(self.main)
+        self.notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        self.notebook.bind("<Double-Button-1>", self.on_notebook_double_click)
+
+        # Safer X-close handling.
+        # We track press and release so a random release/focus click cannot close a tab.
+        self.notebook.bind("<ButtonPress-1>", self.on_notebook_button_press)
+        self.notebook.bind("<ButtonRelease-1>", self.on_notebook_button_release)
+
+    def _build_statusbar(self) -> None:
+        self.status_var = tk.StringVar(value="Ready")
+
+        if ctk is not None:
+            ctk.CTkLabel(
+                self.statusbar,
+                textvariable=self.status_var,
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left", padx=14, pady=6)
+        else:
+            ttk.Label(self.statusbar, textvariable=self.status_var).pack(side="left", padx=10)
+
+    def tab_text(self, title: str) -> str:
+        clean = title.replace("×", "").strip()
+        return clean + TAB_CLOSE_SUFFIX
+
+    def tab_title_without_close(self, tab_id: str) -> str:
+        title = self.notebook.tab(tab_id, "text")
+        return title.replace("×", "").strip()
+
+    def refresh_profiles(self) -> None:
+        for widget in self.profile_buttons_frame.winfo_children():
+            widget.destroy()
+
+        self.profile_buttons = []
+
+        for index, profile in enumerate(self.profiles):
+            label = f"{profile.name}\n{profile.user}@{profile.host}:{profile.port}"
+
+            if ctk is not None:
+                button = ctk.CTkButton(
+                    self.profile_buttons_frame,
+                    text=label,
+                    command=lambda i=index: self.select_profile(i),
+                    fg_color=CARD,
+                    hover_color=CARD_HOVER,
+                    text_color=TEXT,
+                    anchor="w",
+                    height=52,
+                    corner_radius=12,
+                )
+                button.pack(fill="x", pady=4)
+                button.bind("<Double-Button-1>", lambda _event, i=index: self.open_profile_by_index(i))
+                self.profile_buttons.append(button)
+            else:
+                button = ttk.Button(
+                    self.profile_buttons_frame,
+                    text=label,
+                    command=lambda i=index: self.select_profile(i),
+                )
+                button.pack(fill="x")
+                self.profile_buttons.append(button)
+
+    def select_profile(self, index: int) -> None:
+        if index < 0 or index >= len(self.profiles):
+            return
+
+        self.selected_profile_index = index
+        profile = self.profiles[index]
+
+        self.name_var.set(profile.name)
+        self.host_var.set(profile.host)
+        self.user_var.set(profile.user)
+        self.port_var.set(str(profile.port))
+        self.password_var.set("")
+
+        for idx, button in enumerate(self.profile_buttons):
+            if ctk is not None:
+                button.configure(fg_color=ACCENT if idx == index else CARD)
+
+        self.status_var.set(f"Selected profile: {profile.name}")
+
+    def open_profile_by_index(self, index: int) -> None:
+        self.select_profile(index)
+        self.open_new_tab()
+
+    def refresh_commands(self) -> None:
+        for widget in self.command_buttons_frame.winfo_children():
+            widget.destroy()
+
+        self.command_buttons = []
+
+        for index, command in enumerate(self.commands):
+            if ctk is not None:
+                button = ctk.CTkButton(
+                    self.command_buttons_frame,
+                    text=command.name,
+                    command=lambda i=index: self.run_command_by_index(i),
+                    fg_color=ACCENT if command.name.lower() == "clear" else CARD_HOVER,
+                    hover_color=ACCENT_HOVER,
+                    text_color=TEXT,
+                    anchor="w",
+                    height=34,
+                    corner_radius=10,
+                )
+                button.pack(fill="x", pady=4)
+                button.bind("<Button-3>", lambda _event, i=index: self.select_command(i))
+                self.command_buttons.append(button)
+            else:
+                button = ttk.Button(
+                    self.command_buttons_frame,
+                    text=command.name,
+                    command=lambda i=index: self.run_command_by_index(i),
+                )
+                button.pack(fill="x")
+                self.command_buttons.append(button)
+
+    def select_command(self, index: int) -> None:
+        if index < 0 or index >= len(self.commands):
+            return
+
+        self.selected_command_index = index
+
+        for idx, button in enumerate(self.command_buttons):
+            if ctk is not None:
+                selected_color = ACCENT if idx == index else CARD_HOVER
+                button.configure(fg_color=selected_color)
+
+        self.status_var.set(f"Selected command: {self.commands[index].name}")
+
+    def selected_profile(self) -> SSHProfile | None:
+        if self.selected_profile_index is None:
+            messagebox.showerror(APP_NAME, "Select a saved profile first.")
+            return None
+
+        if self.selected_profile_index < 0 or self.selected_profile_index >= len(self.profiles):
+            messagebox.showerror(APP_NAME, "Selected profile is invalid.")
+            return None
+
+        return self.profiles[self.selected_profile_index]
+
+    def selected_command(self) -> QuickCommand | None:
+        if self.selected_command_index is None:
+            messagebox.showerror(APP_NAME, "Right-click or select a command first.")
+            return None
+
+        if self.selected_command_index < 0 or self.selected_command_index >= len(self.commands):
+            return None
+
+        return self.commands[self.selected_command_index]
+
+    def save_profile(self) -> None:
+        name = self.name_var.get().strip()
+        host = self.host_var.get().strip()
+        user = self.user_var.get().strip()
+        password = self.password_var.get()
+
+        if not name or not host or not user:
+            messagebox.showerror(APP_NAME, "Name, Host/IP, and User are required.")
+            return
+
+        try:
+            port = int(self.port_var.get().strip())
+
+            if not (1 <= port <= 65535):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror(APP_NAME, "Port must be a number from 1 to 65535.")
+            return
+
+        old_name = None
+        profile = SSHProfile(name=name, host=host, user=user, port=port)
+
+        if self.selected_profile_index is None:
+            self.profiles.append(profile)
+            self.selected_profile_index = len(self.profiles) - 1
+        else:
+            old_name = self.profiles[self.selected_profile_index].name
+            self.profiles[self.selected_profile_index] = profile
+
+        if old_name and old_name != name:
+            PasswordStore.delete(old_name)
+
+        if password:
+            try:
+                PasswordStore.save(name, password)
+            except Exception as exc:
+                messagebox.showwarning(
+                    APP_NAME,
+                    f"Profile saved, but password was not saved securely.\n\n{exc}",
+                )
+
+        ProfileStore.save(self.profiles)
+        self.refresh_profiles()
+        self.select_profile(self.selected_profile_index)
+        self.status_var.set(f"Saved profile: {name}")
+
+    def clear_form(self) -> None:
+        self.selected_profile_index = None
+
+        self.name_var.set("")
+        self.host_var.set("")
+        self.user_var.set("")
+        self.port_var.set("22")
+        self.password_var.set("")
+
+        for button in self.profile_buttons:
+            if ctk is not None:
+                button.configure(fg_color=CARD)
+
+        self.status_var.set("Ready for new profile")
+
+    def delete_profile(self) -> None:
+        if self.selected_profile_index is None:
+            messagebox.showerror(APP_NAME, "Select a profile first.")
+            return
+
+        profile = self.profiles[self.selected_profile_index]
+
+        if not messagebox.askyesno(APP_NAME, f"Delete profile '{profile.name}'?"):
+            return
+
+        PasswordStore.delete(profile.name)
+        del self.profiles[self.selected_profile_index]
+
+        self.selected_profile_index = None
+
+        ProfileStore.save(self.profiles)
+        self.refresh_profiles()
+        self.clear_form()
+        self.status_var.set(f"Deleted profile: {profile.name}")
+
+    def add_command(self) -> None:
+        name = ask_text(self, APP_NAME, "Command button name:")
+
+        if name is None:
+            return
+
+        name = name.strip()
+
+        if not name:
+            return
+
+        command = ask_text(self, APP_NAME, "Command to run:")
+
+        if command is None:
+            return
+
+        command = command.strip()
+
+        if not command:
+            return
+
+        self.commands.append(QuickCommand(name=name, command=command))
+        CommandStore.save(self.commands)
+        self.refresh_commands()
+        self.status_var.set(f"Added command: {name}")
+
+    def edit_command(self) -> None:
+        selected = self.selected_command()
+
+        if selected is None:
+            return
+
+        old_index = self.selected_command_index
+
+        name = ask_text(
+            self,
+            APP_NAME,
+            "Command button name:",
+            initial_value=selected.name,
+        )
+
+        if name is None:
+            return
+
+        name = name.strip()
+
+        if not name:
+            return
+
+        command = ask_text(
+            self,
+            APP_NAME,
+            "Command to run:",
+            initial_value=selected.command,
+        )
+
+        if command is None:
+            return
+
+        command = command.strip()
+
+        if not command:
+            return
+
+        self.commands[old_index] = QuickCommand(name=name, command=command)
+        CommandStore.save(self.commands)
+        self.refresh_commands()
+        self.select_command(old_index)
+        self.status_var.set(f"Edited command: {name}")
+
+    def delete_command(self) -> None:
+        selected = self.selected_command()
+
+        if selected is None:
+            return
+
+        if not messagebox.askyesno(APP_NAME, f"Delete command '{selected.name}'?"):
+            return
+
+        del self.commands[self.selected_command_index]
+        self.selected_command_index = None
+        CommandStore.save(self.commands)
+        self.refresh_commands()
+        self.status_var.set(f"Deleted command: {selected.name}")
+
+    def tab_for_terminal(self, terminal: EmbeddedTerminal | None) -> ConsoleTab | None:
+        if terminal is None:
+            return None
+
+        for tab_id in self.notebook.tabs():
+            try:
+                tab = self.nametowidget(tab_id)
+            except Exception:
+                continue
+
+            if isinstance(tab, ConsoleTab) and terminal in tab.panes:
+                return tab
+
+        return None
+
+    def get_target_terminal(self) -> EmbeddedTerminal | None:
+        """Return the console that toolbar and quick-command actions should affect."""
+        terminal = self.focused_terminal
+
+        if terminal is not None and self.tab_for_terminal(terminal) is not None:
+            return terminal
+
+        tab = self.current_tab()
+        if tab is not None:
+            if tab.active_terminal is not None:
+                self.focused_terminal = tab.active_terminal
+                return tab.active_terminal
+            if tab.panes:
+                self.focused_terminal = tab.panes[-1]
+                return tab.panes[-1]
+
+        self.focused_terminal = None
+        return None
+
+    def close_tab_for_widget(self, tab_widget: ConsoleTab) -> None:
+        for tab_id in list(self.notebook.tabs()):
+            try:
+                if self.nametowidget(tab_id) is tab_widget:
+                    self.close_tab_by_id(tab_id)
+                    return
+            except Exception:
+                continue
+
+    def run_command_by_index(self, index: int) -> None:
+        if index < 0 or index >= len(self.commands):
+            return
+
+        self.select_command(index)
+        command = self.commands[index]
+        self.run_command_on_focused_console(command.command)
+        self.status_var.set(f"Ran command: {command.name}")
+
+    def run_command_on_focused_console(self, command: str) -> None:
+        terminal = self.get_target_terminal()
+
+        if terminal is None:
+            messagebox.showerror(APP_NAME, "No active console found.")
+            return
+
+        if not terminal.alive:
+            messagebox.showwarning(APP_NAME, "The selected console is disconnected. Use Reconnect first.")
+            return
+
+        terminal.run_command(command)
+
+    def clear_focused_console(self) -> None:
+        terminal = self.get_target_terminal()
+
+        if terminal is None:
+            messagebox.showerror(APP_NAME, "No active console found.")
+            return
+
+        if terminal.alive:
+            terminal.run_command("clear")
+        else:
+            terminal.clear_terminal_widget()
+
+        self.status_var.set("Cleared focused console")
+
+    def create_console_tab(self, title: str | None = None) -> ConsoleTab:
+        self.tab_counter += 1
+
+        tab = ConsoleTab(self.notebook, self)
+        raw_title = title or f"Tab {self.tab_counter}"
+
+        self.notebook.add(tab, text=self.tab_text(raw_title))
+        self.notebook.select(tab)
+
+        self.active_tab = tab
+        return tab
+
+    def current_tab(self) -> ConsoleTab | None:
+        selected = self.notebook.select()
+
+        if not selected:
+            return None
+
+        widget = self.nametowidget(selected)
+
+        if isinstance(widget, ConsoleTab):
+            self.active_tab = widget
+            return widget
+
+        return None
+
+    def open_new_tab(self) -> None:
+        profile = self.selected_profile()
+
+        if profile is None:
+            return
+
+        tab = self.create_console_tab(profile.name)
+        tab.add_console(profile)
+
+        self.status_var.set(f"Opened new tab for {profile.name}")
+
+    def split_current_tab(self) -> None:
+        profile = self.selected_profile()
+
+        if profile is None:
+            return
+
+        tab = self.current_tab()
+
+        if tab is None:
+            tab = self.create_console_tab(profile.name)
+
+        tab.add_console(profile)
+        self.status_var.set(f"Added split console for {profile.name}")
+
+    def open_n_split(self, count: int) -> None:
+        profile = self.selected_profile()
+
+        if profile is None:
+            return
+
+        tab = self.create_console_tab(f"{profile.name} x{count}")
+
+        for _ in range(count):
+            tab.add_console(profile)
+
+        # v1.3.8:
+        # Open 3 split now uses 2 panes on top and 1 full-width pane on bottom.
+        # Open 4 split now uses a 2 x 2 square layout instead of a long strip.
+        tab.set_grid_layout_for_count(count)
+
+        if count == 4:
+            layout_label = "2 x 2 grid"
+        elif count == 3:
+            layout_label = "2 top + 1 bottom grid"
+        else:
+            layout_label = "split"
+
+        self.status_var.set(f"Opened {count} consoles for {profile.name} using {layout_label}")
+
+    def set_active_orientation(self, orientation: str) -> None:
+        tab = self.current_tab()
+
+        if tab is None:
+            return
+
+        tab.set_orientation(orientation)
+
+        label = "vertical" if orientation == tk.HORIZONTAL else "horizontal"
+        self.status_var.set(f"Changed split layout to {label}")
+
+    def rename_current_tab(self) -> None:
+        selected = self.notebook.select()
+
+        if not selected:
+            messagebox.showerror(APP_NAME, "No tab selected.")
+            return
+
+        current_name = self.tab_title_without_close(selected)
+
+        new_name = ask_text(
+            self,
+            APP_NAME,
+            "New tab name:",
+            initial_value=current_name,
+        )
+
+        if new_name is None:
+            return
+
+        new_name = new_name.strip()
+
+        if not new_name:
+            return
+
+        self.notebook.tab(selected, text=self.tab_text(new_name))
+        self.status_var.set(f"Renamed tab to {new_name}")
+
+    def reconnect_active_console(self) -> None:
+        terminal = self.get_target_terminal()
+
+        if terminal is None:
+            messagebox.showerror(APP_NAME, "No active console found.")
+            return
+
+        terminal.reconnect()
+        self.status_var.set("Reconnected selected console")
+
+    def close_active_console(self) -> None:
+        terminal = self.get_target_terminal()
+
+        if terminal is None:
+            messagebox.showerror(APP_NAME, "No active console found.")
+            return
+
+        tab = self.tab_for_terminal(terminal)
+        if tab is None:
+            messagebox.showerror(APP_NAME, "Could not find the selected console tab.")
+            return
+
+        tab.close_console(terminal)
+        self.status_var.set("Closed selected console")
+
+    def close_current_tab(self) -> None:
+        selected = self.notebook.select()
+
+        if not selected:
+            return
+
+        self.close_tab_by_id(selected)
+
+    def close_tab_by_id(self, tab_id: str) -> None:
+        """Fully close a notebook tab and destroy all SSH panes inside it."""
+        tabs_before = list(self.notebook.tabs())
+
+        if tab_id not in tabs_before:
+            return
+
+        try:
+            tab_name = self.tab_title_without_close(tab_id)
+        except Exception:
+            tab_name = "tab"
+
+        try:
+            tab_widget = self.nametowidget(tab_id)
+        except Exception:
+            tab_widget = None
+
+        if isinstance(tab_widget, ConsoleTab):
+            if self.focused_terminal in tab_widget.panes:
+                self.focused_terminal = None
+
+            if self.active_tab is tab_widget:
+                self.active_tab = None
+
+            tab_widget.close_all()
+
+        try:
+            self.notebook.forget(tab_id)
+        except Exception:
+            pass
+
+        try:
+            if tab_widget is not None:
+                tab_widget.destroy()
+        except Exception:
+            pass
+
+        self.pending_tab_close_id = None
+        self.pending_tab_close_press_xy = None
+
+        remaining_tabs = list(self.notebook.tabs())
+
+        if remaining_tabs:
+            try:
+                old_index = tabs_before.index(tab_id)
+                next_index = min(old_index, len(remaining_tabs) - 1)
+                next_tab_id = remaining_tabs[next_index]
+                self.notebook.select(next_tab_id)
+                new_widget = self.nametowidget(next_tab_id)
+
+                if isinstance(new_widget, ConsoleTab):
+                    self.active_tab = new_widget
+
+                    if new_widget.active_terminal is not None:
+                        self.focused_terminal = new_widget.active_terminal
+                        new_widget.set_active_terminal(new_widget.active_terminal)
+                    elif new_widget.panes:
+                        self.focused_terminal = new_widget.panes[-1]
+                        new_widget.set_active_terminal(new_widget.panes[-1])
+                    else:
+                        self.focused_terminal = None
+            except Exception:
+                self.active_tab = None
+                self.focused_terminal = None
+        else:
+            self.active_tab = None
+            self.focused_terminal = None
+
+        self.status_var.set(f"Closed tab: {tab_name}")
+
+    def on_tab_changed(self, _event: object | None = None) -> None:
+        tab = self.current_tab()
+        if tab is not None:
+            if tab.active_terminal is not None:
+                tab.set_active_terminal(tab.active_terminal)
+            elif tab.panes:
+                tab.set_active_terminal(tab.panes[-1])
+
+    def on_notebook_double_click(self, event: tk.Event) -> None:
+        try:
+            clicked_tab = self.notebook.index(f"@{event.x},{event.y}")
+        except Exception:
+            return
+
+        self.notebook.select(clicked_tab)
+        self.rename_current_tab()
+
+    def get_tab_close_candidate(self, event: tk.Event) -> str | None:
+        """
+        Return a tab id only if the event is clearly on the X area of a tab.
+
+        This is intentionally strict to prevent accidental closes when:
+        - focusing a terminal
+        - selecting terminal text
+        - clicking a tab label
+        - dragging the mouse
+        """
+
+        # Only accept events that really belong to the notebook widget.
+        if event.widget is not self.notebook:
+            return None
+
+        try:
+            clicked_tab_index = self.notebook.index(f"@{event.x},{event.y}")
+        except Exception:
+            return None
+
+        tabs = self.notebook.tabs()
+
+        if clicked_tab_index < 0 or clicked_tab_index >= len(tabs):
+            return None
+
+        tab_id = tabs[clicked_tab_index]
+
+        try:
+            bbox = self.notebook.bbox(clicked_tab_index)
+        except Exception:
+            return None
+
+        if not bbox:
+            return None
+
+        tab_x, tab_y, tab_width, tab_height = bbox
+
+        # Must be vertically inside the real tab area.
+        if event.y < tab_y or event.y > tab_y + tab_height:
+            return None
+
+        # Smaller close zone than before.
+        # Old value was 24 px and was too easy to trigger accidentally.
+        close_zone_width = 12
+        close_zone_left = tab_x + tab_width - close_zone_width
+
+        if event.x < close_zone_left or event.x > tab_x + tab_width:
+            return None
+
+        title = self.notebook.tab(tab_id, "text")
+
+        if "×" not in title:
+            return None
+
+        return tab_id
+
+    def on_notebook_button_press(self, event: tk.Event) -> None:
+        self.pending_tab_close_id = self.get_tab_close_candidate(event)
+
+        if self.pending_tab_close_id is not None:
+            self.pending_tab_close_press_xy = (event.x, event.y)
+        else:
+            self.pending_tab_close_press_xy = None
+
+    def on_notebook_button_release(self, event: tk.Event) -> None:
+        tab_to_close = self.pending_tab_close_id
+
+        if tab_to_close is None:
+            return
+
+        try:
+            if tab_to_close not in self.notebook.tabs():
+                self.pending_tab_close_id = None
+                self.pending_tab_close_press_xy = None
+                return
+        except Exception:
+            self.pending_tab_close_id = None
+            self.pending_tab_close_press_xy = None
+            return
+
+        if self.pending_tab_close_press_xy is None:
+            self.pending_tab_close_id = None
+            return
+
+        press_x, press_y = self.pending_tab_close_press_xy
+
+        if abs(event.x - press_x) > 4 or abs(event.y - press_y) > 4:
+            self.pending_tab_close_id = None
+            self.pending_tab_close_press_xy = None
+            return
+
+        release_candidate = self.get_tab_close_candidate(event)
+
+        self.pending_tab_close_id = None
+        self.pending_tab_close_press_xy = None
+
+        if release_candidate == tab_to_close:
+            self.after(1, lambda tab_id=tab_to_close: self.close_tab_by_id(tab_id))
+
+    def open_documentation(self, initial_file: str = DOC_README_FILE) -> None:
+        try:
+            MarkdownDocumentWindow(self, initial_file=initial_file)
+            self.status_var.set("Opened documentation viewer")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Could not open documentation viewer.\n\n{exc}")
+
+    def open_docs_folder(self) -> None:
+        write_embedded_docs_to_config()
+        try:
+            os.startfile(CONFIG_DIR)  # type: ignore[attr-defined]
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Could not open documentation folder.\n\n{exc}")
+
+    def find_plink(self) -> str | None:
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parent
+
+        local = base / "plink.exe"
+
+        if local.exists():
+            return str(local)
+
+        return shutil.which("plink.exe") or shutil.which("plink")
+
+    def check_requirements(self) -> None:
+        customtkinter_status = "Found" if ctk is not None else "Missing"
+        pywinpty_status = "Found" if PtyProcess is not None else "Missing"
+        keyring_status = "Found" if keyring is not None else "Missing"
+        pyte_status = "Found" if pyte is not None else "Missing"
+        plink_status = "Found" if self.find_plink() else "Missing"
+
+        messagebox.showinfo(
+            APP_NAME,
+            "Requirements:\n\n"
+            f"customtkinter: {customtkinter_status}\n"
+            f"pywinpty: {pywinpty_status}\n"
+            f"keyring: {keyring_status}\n"
+            f"pyte: {pyte_status}\n"
+            f"plink.exe: {plink_status}\n\n"
+            "Install Python packages:\n"
+            "pip install pywinpty keyring pyte customtkinter\n\n"
+            "Put plink.exe beside the app for portable use.\n\n"
+            "For bundled documentation in .exe builds, include:\n"
+            "--add-data \"README_Embedded_SSH_Launcher.md;.\"\n"
+            "--add-data \"VERSION_HISTORY_Embedded_SSH_Launcher.md;.\"",
+        )
+
+    def open_config_folder(self) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(CONFIG_DIR)  # type: ignore[attr-defined]
+
+    def on_close(self) -> None:
+        for tab_id in self.notebook.tabs():
+            widget = self.nametowidget(tab_id)
+
+            if isinstance(widget, ConsoleTab):
+                widget.close_all()
+
+        self.destroy()
+
+
+if __name__ == "__main__":
+    if ctk is None:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            APP_NAME,
+            "customtkinter is not installed.\n\nRun:\npip install customtkinter",
+        )
+        root.destroy()
+        sys.exit(1)
+
+    app = EmbeddedSSHLauncher()
+    app.mainloop()
