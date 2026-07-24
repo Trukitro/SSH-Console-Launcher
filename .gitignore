@@ -16,6 +16,9 @@ build/
 dist/
 *.spec
 
+# Inno Setup output (release artifact, not source - attach to GitHub Releases instead)
+installer_output/
+
 # App generated files / local configs
 profiles.json
 commands.json
