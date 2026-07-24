@@ -13,11 +13,18 @@ if (-not (Test-Path "plink.exe")) {
     Write-Host "WARNING: plink.exe was not found in this folder. The app can still build, but SSH password mode may not work portably." -ForegroundColor Yellow
 }
 
+$IconArgs = @()
+if (Test-Path "image\app_icon.ico") {
+    $IconArgs = @("--icon", "image\app_icon.ico")
+}
+
 pyinstaller --onefile --windowed `
   --add-binary "plink.exe;." `
   --add-data "README.md;." `
   --add-data "VERSION_HISTORY.md;." `
   --add-data "FEATURES_PLAN.md;." `
+  --add-data "image;image" `
+  @IconArgs `
   $AppFile
 
 Write-Host "Build complete. Check the dist folder." -ForegroundColor Green

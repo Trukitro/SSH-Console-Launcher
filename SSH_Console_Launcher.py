@@ -85,6 +85,10 @@ SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
 COMMANDS_FILE = CONFIG_DIR / "commands.json"
+UI_STATE_FILE = CONFIG_DIR / "ui_state.json"
+DEFAULT_SIDEBAR_WIDTH = 320
+MIN_SIDEBAR_WIDTH = 240
+MAX_SIDEBAR_WIDTH = 560
 DOC_README_FILE = "README.md"
 DOC_VERSION_FILE = "VERSION_HISTORY.md"
 DOC_FEATURES_FILE = "FEATURES_PLAN.md"
@@ -94,6 +98,9 @@ DOC_ALIASES = {
     DOC_FEATURES_FILE: ["FEATURES_PLAN.md"],
 }
 DOC_FILE_NAMES = [DOC_README_FILE, DOC_VERSION_FILE, DOC_FEATURES_FILE]
+
+ICON_ICO_FILE = "app_icon.ico"
+ICON_PNG_FILE = "app_icon_128.png"
 
 MAX_PANES_PER_TAB = 4
 TAB_CLOSE_SUFFIX = "   ×"
@@ -106,12 +113,99 @@ CARD_HOVER = "#334155"
 ACCENT = "#2563eb"
 ACCENT_HOVER = "#1d4ed8"
 SUCCESS = "#16a34a"
+SUCCESS_HOVER = "#15803d"
 DANGER = "#dc2626"
+DANGER_HOVER = "#991b1b"
 WARNING = "#d97706"
+WARNING_HOVER = "#92400e"
 TEXT = "#e5e7eb"
 MUTED = "#9ca3af"
 TERMINAL_BG = "#050505"
 TERMINAL_FG = "#f8fafc"
+
+# Secondary near-black panel tones (markdown viewer body / blockquote backgrounds)
+PANEL_DARK = "#0b1220"
+PANEL_QUOTE = "#172033"
+
+# Shared highlight/accent tones used outside the core semantic palette above
+HIGHLIGHT_CODE = "#fef08a"
+HIGHLIGHT_SEARCH = "#facc15"
+
+
+def _clamp_channel(value: int) -> int:
+    return max(0, min(255, value))
+
+
+def tint(hex_color: str, factor: float) -> str:
+    """Blend a hex color toward white (factor > 0) or black (factor < 0).
+
+    factor is clamped to [-1, 1]; 0 returns the color unchanged.
+    """
+    factor = max(-1.0, min(1.0, factor))
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    target = 255 if factor >= 0 else 0
+    blend = abs(factor)
+    r = _clamp_channel(round(r + (target - r) * blend))
+    g = _clamp_channel(round(g + (target - g) * blend))
+    b = _clamp_channel(round(b + (target - b) * blend))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# Secondary hover shade for buttons whose fg_color is already CARD_HOVER
+# (e.g. "New", "Split Current Tab") - must differ from CARD_HOVER itself.
+CARD_HOVER_2 = "#475569"
+
+_HOVER_COLOR_MAP = {
+    ACCENT: ACCENT_HOVER,
+    SUCCESS: SUCCESS_HOVER,
+    DANGER: DANGER_HOVER,
+    WARNING: WARNING_HOVER,
+    CARD: CARD_HOVER,
+    CARD_HOVER: CARD_HOVER_2,
+}
+# Any fg_color not covered above (including the *_HOVER constants themselves,
+# if ever used directly as a button color) falls through to tint() in
+# resolve_hover_color(), which always yields a visibly different shade.
+
+
+def resolve_hover_color(color: str) -> str:
+    """Return a visibly different hover shade for a given button fg_color."""
+    if color in _HOVER_COLOR_MAP:
+        return _HOVER_COLOR_MAP[color]
+    return tint(color, 0.18)
+
+
+def build_button(
+    parent: tk.Widget,
+    text: str,
+    command,
+    color: str,
+    *,
+    width: int | None = None,
+    height: int = 34,
+    corner_radius: int = 10,
+    anchor: str | None = None,
+):
+    """Single shared CTkButton factory used by every button in the app.
+
+    Root-cause fix for the previously copy-pasted hover-color bug: hover_color
+    is always resolved to a shade that's actually different from fg_color.
+    """
+    kwargs = dict(
+        text=text,
+        command=command,
+        fg_color=color,
+        hover_color=resolve_hover_color(color),
+        height=height,
+        corner_radius=corner_radius,
+    )
+    if width is not None:
+        kwargs["width"] = width
+    if anchor is not None:
+        kwargs["anchor"] = anchor
+    return ctk.CTkButton(parent, **kwargs)
+
 
 MONITORING_HEALTH_COMMAND = r"""
 WEB2PY_DIR="/home/www-data/web2py"
@@ -278,9 +372,46 @@ ANSI_COLOR_MAP = {
     "lightwhite": "#ffffff",
 }
 
+# Independent from ANSI_COLOR_MAP: that map deliberately brightens dim foreground
+# colors (e.g. "black") for text readability, which is wrong for a *background*
+# cell - a remote app setting a literal black/dim background must render dark,
+# not near-white. These are real dark tones per hue instead.
+_ANSI_BG_BASE = "#111827"
+_ANSI_BG_RED = "#7f1d1d"
+_ANSI_BG_GREEN = "#14532d"
+_ANSI_BG_YELLOW = "#78350f"
+_ANSI_BG_BLUE = "#1e3a8a"
+_ANSI_BG_MAGENTA = "#701a75"
+_ANSI_BG_CYAN = "#164e63"
+_ANSI_BG_WHITE = "#cbd5e1"
+
 ANSI_BACKGROUND_MAP = {
-    **ANSI_COLOR_MAP,
     "default": TERMINAL_BG,
+    "black": _ANSI_BG_BASE,
+    "red": _ANSI_BG_RED,
+    "green": _ANSI_BG_GREEN,
+    "yellow": _ANSI_BG_YELLOW,
+    "brown": _ANSI_BG_YELLOW,
+    "blue": _ANSI_BG_BLUE,
+    "magenta": _ANSI_BG_MAGENTA,
+    "cyan": _ANSI_BG_CYAN,
+    "white": _ANSI_BG_WHITE,
+    "brightblack": tint(_ANSI_BG_BASE, 0.25),
+    "brightred": tint(_ANSI_BG_RED, 0.25),
+    "brightgreen": tint(_ANSI_BG_GREEN, 0.25),
+    "brightyellow": tint(_ANSI_BG_YELLOW, 0.25),
+    "brightblue": tint(_ANSI_BG_BLUE, 0.25),
+    "brightmagenta": tint(_ANSI_BG_MAGENTA, 0.25),
+    "brightcyan": tint(_ANSI_BG_CYAN, 0.25),
+    "brightwhite": "#ffffff",
+    "lightblack": tint(_ANSI_BG_BASE, 0.25),
+    "lightred": tint(_ANSI_BG_RED, 0.25),
+    "lightgreen": tint(_ANSI_BG_GREEN, 0.25),
+    "lightyellow": tint(_ANSI_BG_YELLOW, 0.25),
+    "lightblue": tint(_ANSI_BG_BLUE, 0.25),
+    "lightmagenta": tint(_ANSI_BG_MAGENTA, 0.25),
+    "lightcyan": tint(_ANSI_BG_CYAN, 0.25),
+    "lightwhite": "#ffffff",
 }
 
 EMBEDDED_DOCUMENTS = {'README.md': '# Embedded SSH Console Launcher\n\n**Current version:** 1.4.1  \n**Platform:** Windows 10 / Windows 11  \n**Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.\n\n---\n\n## Overview\n\nEmbedded SSH Console Launcher is a Windows desktop app built in Python. It was created to make repeated SSH work faster and easier, especially when connecting to the same Linux servers many times per day.\n\nInstead of opening separate command prompt windows or manually typing usernames, passwords, and commands every time, the app lets you:\n\n- Save SSH profiles.\n- Open one or more SSH consoles quickly.\n- Use tabs and split panes.\n- Auto-login with saved credentials.\n- Run frequently used commands with one click.\n- Monitor session connection status.\n- Reconnect, clear, focus, and close sessions from the GUI.\n\nThe app is designed for a maximum practical workflow of around 1 to 4 terminals per tab, but it can support multiple tabs.\n\n---\n\n## Main Features\n\n### SSH Profile Management\n\nYou can save SSH profiles with:\n\n- Profile name\n- Host / IP\n- Username\n- Port\n- Password\n\nPasswords are stored using the Windows credential/keyring system through the Python `keyring` package. Passwords are not stored directly in the JSON profile file.\n\nProfiles are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\profiles.json\n```\n\n---\n\n### Embedded SSH Consoles\n\nThe app opens SSH sessions inside the GUI instead of launching separate Windows Terminal windows.\n\nEach console supports:\n\n- Auto-login\n- Terminal output rendering\n- ANSI color handling\n- `htop`\n- `uwsgitop`\n- `tail -f`\n- Standard shell commands\n- Copy/paste\n- Reconnect\n- Clear\n- Close\n- Focus selection\n\nSSH sessions are launched through `plink.exe` from PuTTY.\n\n---\n\n### Tabs and Split Panes\n\nThe app supports:\n\n- New tab\n- Split current tab\n- Open 2 split consoles\n- Open 3 split consoles\n- Open 4 split consoles\n- Vertical split\n- Horizontal split\n- Rename current tab\n- Close current tab\n- Close tab using the `×` symbol\n\nIf the last console in a tab is closed, the tab is also destroyed.\n\n---\n\n### Quick Commands\n\nQuick Commands let you create buttons for commands you run often.\n\nDefault quick commands include:\n\n```bash\nhtop\ncd /home/www-data/web2py/\ntail -f web2py.log\nsudo uwsgitop /tmp/stats.socket\nclear\n```\n\nYou can add, edit, and delete commands from the GUI.\n\nQuick commands are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\nQuick commands are sent to the currently focused terminal.\n\n---\n\n### Connection Status Indicator\n\nEach terminal shows a connection status indicator:\n\n```text\n● Connected\n● Connecting\n● Disconnected\n```\n\nThe indicator helps identify when a session has dropped and needs reconnecting.\n\n---\n\n### Modern UI\n\nStarting with version 1.3, the UI uses `customtkinter` for a modern dark interface.\n\nUI improvements include:\n\n- Dark theme\n- Modern left sidebar\n- Rounded buttons\n- Toolbar actions\n- Quick command buttons\n- Highlighted active terminal\n- Status bar\n- Improved layout and spacing\n\n---\n\n## Requirements\n\nInstall Python packages:\n\n```powershell\npip install pywinpty keyring pyte customtkinter\n```\n\nRequired executable:\n\n```text\nplink.exe\n```\n\nPlace `plink.exe` in the same folder as the Python script or compiled `.exe`, or install PuTTY and add it to your PATH.\n\n---\n\n## Running the App\n\nExample:\n\n```powershell\n& c:\\python312\\python.exe c:\\Users\\Ricrado\\Documents\\Python_Scripts\\SSH_CONSOLE_LAUNCHER\\SSH_Console_Launcher.py\n```\n\n---\n\n## Building a Portable EXE\n\nInstall build tools:\n\n```powershell\npip install pyinstaller pywinpty keyring pyte customtkinter\n```\n\nBuild:\n\n```powershell\npyinstaller --onefile --windowed `\n  --add-binary "plink.exe;." `\n  --add-data "README.md;." `\n  --add-data "VERSION_HISTORY.md;." `\n  --add-data "FEATURES_PLAN.md;." `\n  SSH_Console_Launcher.py\n```\n\nThe final executable will be created in:\n\n```text\ndist\\\n```\n\nRecommended folder structure:\n\n```text\nSSHLauncher\\\n  SSH_Console_Launcher.exe\n  plink.exe\n```\n\n---\n\n## Configuration Files\n\nThe app stores user data in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\\n```\n\nFiles:\n\n```text\nprofiles.json\ncommands.json\n```\n\nPasswords are stored through Windows/keyring, not directly in these files.\n\n---\n\n## Security Notes\n\nThis app is designed for internal/personal administrative use.\n\nImportant notes:\n\n- Passwords are saved through `keyring`, not plain JSON.\n- `plink.exe -pw` is used for automatic login.\n- SSH key support is a recommended future improvement.\n- Anyone with access to your Windows user session may be able to use the saved profiles.\n- Use Windows account protection and disk encryption where appropriate.\n\n---\n\n## Known Limitations\n\nThe app uses `tk.Text` plus `pyte` for terminal rendering. This works well enough for the current workflow, including `htop` and `uwsgitop`, but it is not a full native terminal emulator like Windows Terminal, xterm, or xterm.js.\n\nSome highly interactive terminal applications may still have minor rendering differences.\n\nExamples that may not be perfect:\n\n- Complex `vim` usage\n- Some `nano` layouts\n- Advanced ncurses interfaces\n- Mouse interactions inside terminal apps\n\n---\n\n## Layout Manager\n\nStarting with version 1.3.9, the app includes explicit Layout Manager controls so you can rearrange consoles after they are already open.\n\nAvailable layouts:\n\n- **Auto Layout**: chooses the best layout based on pane count.\n- **2 Panes: Side by Side**: two terminals left/right.\n- **2 Panes: Stacked**: two terminals top/bottom.\n- **3 Panes: 2 Top / 1 Bottom**: two terminals on top, one full-width terminal below.\n- **3 Panes: 1 Top / 2 Bottom**: one full-width terminal on top, two terminals below.\n- **4 Panes: 2 x 2 Grid**: four terminals in a square grid.\n\nThis means you no longer need to close and reopen SSH sessions just to change how the panes are arranged.\n\n---\n\n## Smart Split Layouts\n\nStarting with version 1.3.8, multi-console split views are arranged more naturally:\n\n- **Open 3 Split** creates two consoles on the top row and one full-width console on the bottom row.\n- **Open 4 Split** creates a 2 x 2 square layout.\n\nThe manual **Vertical Split** and **Horizontal Split** buttons still force a simple stacked or side-by-side layout when needed.\n\n---\n\n## Built-in Documentation Viewer\n\nThe app can display project documentation inside the GUI. It looks for these files beside the `.py` script or packaged `.exe`:\n\n```text\nREADME.md\nVERSION_HISTORY.md\nFEATURES_PLAN.md\n```\n\nWhen the app is packaged as a Windows `.exe`, include these files with PyInstaller using `--add-data`. If the external files are missing, the app also includes embedded fallback documentation.\n\n---\n\n\n---\n\n## Web Host Monitoring Dashboard Upgrade\n\nStarting with **v1.4.1**, the Monitoring Dashboard is focused on detecting conditions that can lead to web host degradation or outages, including possible **502 Bad Gateway** symptoms.\n\nThe dashboard now checks more than basic CPU/RAM/Disk. It also looks for:\n\n- Load average compared to CPU cores.\n- RAM and swap pressure.\n- Disk usage for `/` and the Web2py folder.\n- Number of established TCP/web connections.\n- Top remote client IPs.\n- Estimated active users/client IPs from Web2py logs.\n- Login/auth/user-related events from Web2py logs.\n- Recent Web2py errors, tracebacks, exceptions, tickets, and failures.\n- Nginx process/status and recent Nginx upstream/gateway errors.\n- uWSGI worker status from `/tmp/stats.socket` when available.\n- Busy/idle uWSGI worker ratio.\n- uWSGI exceptions, harakiri counts, respawns, RSS memory, and average response time when available.\n- Web2py/uWSGI top CPU consumers.\n\n### New Monitoring Cards\n\nThe dashboard includes these additional cards:\n\n- Overall Web Host Risk\n- 502 / Gateway Risk\n- Swap Usage\n- Disk Web2py\n- Web Connections\n- Active Users / IPs\n- uWSGI Workers\n- uWSGI Health\n- Nginx Status\n- Login/User Events\n- Web2py/uWSGI CPU\n\n### New Monitoring Quick Actions\n\nThe sidebar Monitoring section now includes:\n\n- Open Dashboard\n- Run Health Check\n- 502 / Gateway Check\n- Connections\n- Active Users / IPs\n- Recent Errors\n- Web2py Processes\n\nThe goal is to make it easier to detect early warning signs before users begin seeing `502 Bad Gateway`, Nginx upstream failures, overloaded workers, excessive connections, or Linux resource saturation.\n\n---\n\n## Web2py Monitoring Dashboard\n\nStarting with version 1.4.0, the app includes a Monitoring Dashboard focused on Web2py/uWSGI server health.\n\nOpen it from the sidebar under:\n\n```text\nMonitoring -> Open Dashboard\n```\n\nThe dashboard runs a non-interactive health check over SSH using `plink.exe` and shows the result as cards. It does not scrape values from the `htop` screen; it runs direct shell commands and parses the output.\n\nDashboard cards include:\n\n- Server\n- Load Average\n- RAM Usage\n- Disk `/`\n- Web2py Processes\n- uWSGI Processes\n- Recent Errors\n- Top CPU\n- Top Memory\n\nMonitoring quick actions include:\n\n- Open Dashboard\n- Run Health Check\n- Recent Errors\n- Web2py Processes\n\nThe dashboard also supports optional auto-refresh intervals.\n\n---\n\n## Recommended Next Steps\n\nPotential future improvements:\n\n1. Hotkeys for Quick Commands, such as `Ctrl+1`, `Ctrl+2`, etc.\n2. Command groups, such as Web2py, Logs, Monitoring, Docker, Database.\n3. Auto-reconnect option when a connection drops.\n4. Save layouts per profile.\n5. Open a profile with a predefined set of panes and commands.\n6. Run a command on all panes.\n7. Local session logging.\n8. Search inside terminal output.\n9. Import/export profiles and commands.\n10. SSH key support.\n11. Full installer with `plink.exe` included.\n12. Possible migration to xterm.js/WebView for more complete terminal rendering.\n\n---\n\n## Current Stable Version\n\nThe current working version is:\n\n```text\nv1.4.1\n```\n\nThis version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, and the advanced Web Host Monitoring Dashboard upgrade.', 'README_Embedded_SSH_Launcher.md': '# Embedded SSH Console Launcher\n\n**Current version:** 1.4.1  \n**Platform:** Windows 10 / Windows 11  \n**Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.\n\n---\n\n## Overview\n\nEmbedded SSH Console Launcher is a Windows desktop app built in Python. It was created to make repeated SSH work faster and easier, especially when connecting to the same Linux servers many times per day.\n\nInstead of opening separate command prompt windows or manually typing usernames, passwords, and commands every time, the app lets you:\n\n- Save SSH profiles.\n- Open one or more SSH consoles quickly.\n- Use tabs and split panes.\n- Auto-login with saved credentials.\n- Run frequently used commands with one click.\n- Monitor session connection status.\n- Reconnect, clear, focus, and close sessions from the GUI.\n\nThe app is designed for a maximum practical workflow of around 1 to 4 terminals per tab, but it can support multiple tabs.\n\n---\n\n## Main Features\n\n### SSH Profile Management\n\nYou can save SSH profiles with:\n\n- Profile name\n- Host / IP\n- Username\n- Port\n- Password\n\nPasswords are stored using the Windows credential/keyring system through the Python `keyring` package. Passwords are not stored directly in the JSON profile file.\n\nProfiles are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\profiles.json\n```\n\n---\n\n### Embedded SSH Consoles\n\nThe app opens SSH sessions inside the GUI instead of launching separate Windows Terminal windows.\n\nEach console supports:\n\n- Auto-login\n- Terminal output rendering\n- ANSI color handling\n- `htop`\n- `uwsgitop`\n- `tail -f`\n- Standard shell commands\n- Copy/paste\n- Reconnect\n- Clear\n- Close\n- Focus selection\n\nSSH sessions are launched through `plink.exe` from PuTTY.\n\n---\n\n### Tabs and Split Panes\n\nThe app supports:\n\n- New tab\n- Split current tab\n- Open 2 split consoles\n- Open 3 split consoles\n- Open 4 split consoles\n- Vertical split\n- Horizontal split\n- Rename current tab\n- Close current tab\n- Close tab using the `×` symbol\n\nIf the last console in a tab is closed, the tab is also destroyed.\n\n---\n\n### Quick Commands\n\nQuick Commands let you create buttons for commands you run often.\n\nDefault quick commands include:\n\n```bash\nhtop\ncd /home/www-data/web2py/\ntail -f web2py.log\nsudo uwsgitop /tmp/stats.socket\nclear\n```\n\nYou can add, edit, and delete commands from the GUI.\n\nQuick commands are saved in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\nQuick commands are sent to the currently focused terminal.\n\n---\n\n### Connection Status Indicator\n\nEach terminal shows a connection status indicator:\n\n```text\n● Connected\n● Connecting\n● Disconnected\n```\n\nThe indicator helps identify when a session has dropped and needs reconnecting.\n\n---\n\n### Modern UI\n\nStarting with version 1.3, the UI uses `customtkinter` for a modern dark interface.\n\nUI improvements include:\n\n- Dark theme\n- Modern left sidebar\n- Rounded buttons\n- Toolbar actions\n- Quick command buttons\n- Highlighted active terminal\n- Status bar\n- Improved layout and spacing\n\n---\n\n## Requirements\n\nInstall Python packages:\n\n```powershell\npip install pywinpty keyring pyte customtkinter\n```\n\nRequired executable:\n\n```text\nplink.exe\n```\n\nPlace `plink.exe` in the same folder as the Python script or compiled `.exe`, or install PuTTY and add it to your PATH.\n\n---\n\n## Running the App\n\nExample:\n\n```powershell\n& c:\\python312\\python.exe c:\\Users\\Ricrado\\Documents\\Python_Scripts\\SSH_CONSOLE_LAUNCHER\\SSH_Console_Launcher.py\n```\n\n---\n\n## Building a Portable EXE\n\nInstall build tools:\n\n```powershell\npip install pyinstaller pywinpty keyring pyte customtkinter\n```\n\nBuild:\n\n```powershell\npyinstaller --onefile --windowed `\n  --add-binary "plink.exe;." `\n  --add-data "README.md;." `\n  --add-data "VERSION_HISTORY.md;." `\n  --add-data "FEATURES_PLAN.md;." `\n  SSH_Console_Launcher.py\n```\n\nThe final executable will be created in:\n\n```text\ndist\\\n```\n\nRecommended folder structure:\n\n```text\nSSHLauncher\\\n  SSH_Console_Launcher.exe\n  plink.exe\n```\n\n---\n\n## Configuration Files\n\nThe app stores user data in:\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\\n```\n\nFiles:\n\n```text\nprofiles.json\ncommands.json\n```\n\nPasswords are stored through Windows/keyring, not directly in these files.\n\n---\n\n## Security Notes\n\nThis app is designed for internal/personal administrative use.\n\nImportant notes:\n\n- Passwords are saved through `keyring`, not plain JSON.\n- `plink.exe -pw` is used for automatic login.\n- SSH key support is a recommended future improvement.\n- Anyone with access to your Windows user session may be able to use the saved profiles.\n- Use Windows account protection and disk encryption where appropriate.\n\n---\n\n## Known Limitations\n\nThe app uses `tk.Text` plus `pyte` for terminal rendering. This works well enough for the current workflow, including `htop` and `uwsgitop`, but it is not a full native terminal emulator like Windows Terminal, xterm, or xterm.js.\n\nSome highly interactive terminal applications may still have minor rendering differences.\n\nExamples that may not be perfect:\n\n- Complex `vim` usage\n- Some `nano` layouts\n- Advanced ncurses interfaces\n- Mouse interactions inside terminal apps\n\n---\n\n## Layout Manager\n\nStarting with version 1.3.9, the app includes explicit Layout Manager controls so you can rearrange consoles after they are already open.\n\nAvailable layouts:\n\n- **Auto Layout**: chooses the best layout based on pane count.\n- **2 Panes: Side by Side**: two terminals left/right.\n- **2 Panes: Stacked**: two terminals top/bottom.\n- **3 Panes: 2 Top / 1 Bottom**: two terminals on top, one full-width terminal below.\n- **3 Panes: 1 Top / 2 Bottom**: one full-width terminal on top, two terminals below.\n- **4 Panes: 2 x 2 Grid**: four terminals in a square grid.\n\nThis means you no longer need to close and reopen SSH sessions just to change how the panes are arranged.\n\n---\n\n## Smart Split Layouts\n\nStarting with version 1.3.8, multi-console split views are arranged more naturally:\n\n- **Open 3 Split** creates two consoles on the top row and one full-width console on the bottom row.\n- **Open 4 Split** creates a 2 x 2 square layout.\n\nThe manual **Vertical Split** and **Horizontal Split** buttons still force a simple stacked or side-by-side layout when needed.\n\n---\n\n## Built-in Documentation Viewer\n\nThe app can display project documentation inside the GUI. It looks for these files beside the `.py` script or packaged `.exe`:\n\n```text\nREADME.md\nVERSION_HISTORY.md\nFEATURES_PLAN.md\n```\n\nWhen the app is packaged as a Windows `.exe`, include these files with PyInstaller using `--add-data`. If the external files are missing, the app also includes embedded fallback documentation.\n\n---\n\n\n---\n\n## Web Host Monitoring Dashboard Upgrade\n\nStarting with **v1.4.1**, the Monitoring Dashboard is focused on detecting conditions that can lead to web host degradation or outages, including possible **502 Bad Gateway** symptoms.\n\nThe dashboard now checks more than basic CPU/RAM/Disk. It also looks for:\n\n- Load average compared to CPU cores.\n- RAM and swap pressure.\n- Disk usage for `/` and the Web2py folder.\n- Number of established TCP/web connections.\n- Top remote client IPs.\n- Estimated active users/client IPs from Web2py logs.\n- Login/auth/user-related events from Web2py logs.\n- Recent Web2py errors, tracebacks, exceptions, tickets, and failures.\n- Nginx process/status and recent Nginx upstream/gateway errors.\n- uWSGI worker status from `/tmp/stats.socket` when available.\n- Busy/idle uWSGI worker ratio.\n- uWSGI exceptions, harakiri counts, respawns, RSS memory, and average response time when available.\n- Web2py/uWSGI top CPU consumers.\n\n### New Monitoring Cards\n\nThe dashboard includes these additional cards:\n\n- Overall Web Host Risk\n- 502 / Gateway Risk\n- Swap Usage\n- Disk Web2py\n- Web Connections\n- Active Users / IPs\n- uWSGI Workers\n- uWSGI Health\n- Nginx Status\n- Login/User Events\n- Web2py/uWSGI CPU\n\n### New Monitoring Quick Actions\n\nThe sidebar Monitoring section now includes:\n\n- Open Dashboard\n- Run Health Check\n- 502 / Gateway Check\n- Connections\n- Active Users / IPs\n- Recent Errors\n- Web2py Processes\n\nThe goal is to make it easier to detect early warning signs before users begin seeing `502 Bad Gateway`, Nginx upstream failures, overloaded workers, excessive connections, or Linux resource saturation.\n\n---\n\n## Web2py Monitoring Dashboard\n\nStarting with version 1.4.0, the app includes a Monitoring Dashboard focused on Web2py/uWSGI server health.\n\nOpen it from the sidebar under:\n\n```text\nMonitoring -> Open Dashboard\n```\n\nThe dashboard runs a non-interactive health check over SSH using `plink.exe` and shows the result as cards. It does not scrape values from the `htop` screen; it runs direct shell commands and parses the output.\n\nDashboard cards include:\n\n- Server\n- Load Average\n- RAM Usage\n- Disk `/`\n- Web2py Processes\n- uWSGI Processes\n- Recent Errors\n- Top CPU\n- Top Memory\n\nMonitoring quick actions include:\n\n- Open Dashboard\n- Run Health Check\n- Recent Errors\n- Web2py Processes\n\nThe dashboard also supports optional auto-refresh intervals.\n\n---\n\n## Recommended Next Steps\n\nPotential future improvements:\n\n1. Hotkeys for Quick Commands, such as `Ctrl+1`, `Ctrl+2`, etc.\n2. Command groups, such as Web2py, Logs, Monitoring, Docker, Database.\n3. Auto-reconnect option when a connection drops.\n4. Save layouts per profile.\n5. Open a profile with a predefined set of panes and commands.\n6. Run a command on all panes.\n7. Local session logging.\n8. Search inside terminal output.\n9. Import/export profiles and commands.\n10. SSH key support.\n11. Full installer with `plink.exe` included.\n12. Possible migration to xterm.js/WebView for more complete terminal rendering.\n\n---\n\n## Current Stable Version\n\nThe current working version is:\n\n```text\nv1.4.1\n```\n\nThis version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, and the advanced Web Host Monitoring Dashboard upgrade.', 'VERSION_HISTORY.md': '# Embedded SSH Console Launcher - Version History\n\nThis file tracks the project evolution from the first working concept through the current stable version.\n\n---\n\n## v1.0 - Initial Working GUI\n\n### Goal\n\nCreate a small Windows GUI that can save SSH connection information and open SSH consoles quickly.\n\n### Main Features\n\n- Tkinter-based GUI.\n- Save SSH profiles.\n- Store host, user, port, and password.\n- Open SSH sessions using `plink.exe`.\n- Support opening multiple consoles.\n- Basic tab and split-pane workflow.\n- Automatic password login.\n- Basic terminal output display.\n\n### Notes\n\nThis version proved that the core workflow was possible:\n\n```text\nSave profile -> Select profile -> Open console quickly\n```\n\n---\n\n## v1.1 - Tabs, Rename, Close, and Reconnect\n\n### Added\n\n- Rename current tab.\n- Double-click tab to rename.\n- `×` symbol in tab title.\n- Click `×` to close a tab.\n- Reconnect button per console.\n- Reconnect selected console from the sidebar.\n- Better session lifecycle handling.\n\n### Fixed / Improved\n\n- Added better control over individual SSH panes.\n- Added reconnect behavior without needing to close and reopen the whole app.\n\n---\n\n## v1.2 - Quick Commands\n\n### Added\n\n- Quick Commands section.\n- Add custom command buttons.\n- Edit saved commands.\n- Delete saved commands.\n- Run command in focused terminal.\n- General Clear Console command.\n- Default commands:\n  - `htop`\n  - `cd /home/www-data/web2py/`\n  - `tail -f web2py.log`\n  - `sudo uwsgitop /tmp/stats.socket`\n  - `clear`\n\n### Files Added\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\n### Purpose\n\nReduce repetitive typing for common admin commands.\n\n---\n\n## v1.3 - Modern UI Refresh\n\n### Added\n\n- CustomTkinter UI.\n- Modern dark theme.\n- Rounded buttons.\n- Better sidebar layout.\n- Top toolbar.\n- Modern connection/profile form.\n- Quick command buttons instead of only listbox style.\n- Improved spacing.\n- Status bar.\n- Active terminal visual highlight.\n\n### Dependencies Added\n\n```powershell\npip install customtkinter\n```\n\n### Notes\n\nThis version modernized the appearance while keeping the working SSH and terminal backend.\n\n---\n\n## v1.3.1 - CustomTkinter Startup Fix\n\n### Fixed\n\n- `CTkScrollableFrame.grid_propagate(False)` startup crash.\n\n### Cause\n\n`CTkScrollableFrame.grid_propagate()` does not accept `False` like a normal Tkinter frame.\n\n### Fix\n\nUse:\n\n```python\nself.sidebar.configure(width=320)\n```\n\ninstead of:\n\n```python\nself.sidebar.grid_propagate(False)\n```\n\nfor CustomTkinter scrollable frames.\n\n---\n\n## v1.3.2 - Safer Tab Close Handling\n\n### Fixed\n\n- Accidental tab closing when clicking or selecting terminal text.\n- Fake `×` tab close area was too aggressive.\n\n### Added\n\n- Press/release tracking for tab close.\n- Smaller close zone.\n- Close only if press and release both happen on the `×` area.\n- Ignore drag/focus/select actions.\n\n### Methods Added / Updated\n\n- `get_tab_close_candidate`\n- `on_notebook_button_press`\n- `on_notebook_button_release`\n\n---\n\n## v1.3.3 - Tab Destruction and Terminal Color Support\n\n### Fixed\n\n- Closed tabs could remain visible or not disappear.\n- Notebook tab was being forgotten but not fully destroyed.\n- Old tab references could remain in memory.\n- SSH processes could remain alive after closing a tab.\n\n### Improved\n\n- Fully destroy tab frame after closing.\n- Close all SSH panes inside a tab before removing the tab.\n- Clear active/focused terminal references when closing tabs.\n- Delay close using `after(1, ...)` so notebook finishes processing click events first.\n\n### Added\n\n- ANSI terminal color support using `pyte` character attributes.\n- Text tags for terminal foreground/background colors.\n- Support for bold, underline, reverse video, and cursor highlighting.\n\n---\n\n## v1.3.4 - Connection Status Indicator\n\n### Added\n\n- Connection status indicator per terminal:\n  - `● Connected`\n  - `● Connecting`\n  - `● Disconnected`\n- Status color:\n  - Green for connected\n  - Orange for connecting\n  - Red for disconnected\n\n### Improved\n\n- SSH sessions are checked periodically.\n- Dropped connections are shown visually.\n- Reconnect changes status back through connecting to connected.\n\n### Purpose\n\nMake it obvious when a terminal session needs reconnecting.\n\n---\n\n## v1.3.5 - High Contrast Terminal Colors\n\n### Fixed\n\n- Some `htop` and `uwsgitop` colors were too dark.\n- Processor numbers, users, and dim values were hard to read.\n\n### Improved\n\n- Dark gray / black foreground values are remapped to readable light gray/white.\n- Contrast protection checks foreground/background contrast.\n- If contrast is too low, text is forced brighter.\n\n### Purpose\n\nImprove readability of colored terminal applications on black background.\n\n---\n\n## v1.3.6 - Focus, Close, and Quick Command Behavior Fixes\n\n### Fixed\n\n- Quick Commands were sometimes sent to the wrong terminal.\n- Focus button did not correctly make a terminal active.\n- Top toolbar buttons did not always act on the correct terminal.\n- Close button inside a terminal closed the pane but did not destroy the tab when it was the last terminal.\n- App could keep references to closed terminals.\n- Active terminal highlighting could become stale.\n\n### Improved\n\n- Focus now updates:\n  - Current terminal\n  - Current tab\n  - App-level focused terminal reference\n  - Active visual state\n- Quick commands now send to the actual focused terminal.\n- Top toolbar actions now use the focused terminal or current tab correctly.\n- Closing the last terminal in a tab closes and destroys the entire tab.\n- Console cleanup is more complete.\n\n### Current Status\n\nThis is the current stable version.\n\n---\n\n## v1.3.7 - Built-in Documentation Viewer\n\n### Added\n\n- Built-in documentation viewer inside the app.\n- Documentation section in the sidebar.\n- In-app Markdown rendering for README and VERSION_HISTORY files.\n- Search box inside the documentation viewer.\n- Reload documentation button.\n- Open documentation folder button.\n- PyInstaller-compatible document discovery.\n- Embedded fallback Markdown content when external files are not found.\n\n### Improved\n\n- The app can now ship with its own documentation as part of the Windows `.exe` build.\n\n---\n\n## v1.3.8 - Smart Grid Split Layouts\n\n### Fixed\n\n- Open 3 Split no longer creates a long single-line layout.\n- Open 4 Split no longer creates four narrow vertical panes.\n\n### Added / Improved\n\n- Open 3 Split now creates two panes on the top row and one full-width pane on the bottom row.\n- Open 4 Split now creates a 2 x 2 square grid.\n- Manual Vertical Split and Horizontal Split actions still work and can override the auto-grid layout.\n- Pane cleanup was adjusted to work with the new grid layout system.\n\n---\n\n## v1.3.9 - Layout Manager\n\n### Added\n\n- Explicit Layout Manager buttons in the sidebar.\n- 2-pane side-by-side layout.\n- 2-pane stacked layout.\n- 3-pane layout with two panes on top and one full-width pane on the bottom.\n- 3-pane layout with one full-width pane on top and two panes on the bottom.\n- 4-pane 2 x 2 grid layout.\n- Auto Layout mode to choose the best layout based on pane count.\n\n### Improved\n\n- Existing panes can now be rearranged without reopening SSH sessions.\n- Open 3 Split and Open 4 Split still default to the smart layouts introduced in v1.3.8.\n- Manual layout controls are now clearer and more specific than the old Vertical/Horizontal split buttons.\n\n---\n\n## v1.4.0 - Web2py Monitoring Dashboard\n\n### Added\n\n- Monitoring Dashboard window.\n- Server health check using non-interactive SSH command execution.\n- CPU/load card.\n- RAM card.\n- Disk `/` card.\n- Web2py process card.\n- uWSGI process card.\n- Recent error count card.\n- Top CPU process card.\n- Top memory process card.\n- Auto-refresh controls.\n- Monitoring sidebar section.\n- Health check quick action.\n- Recent errors quick action.\n- Web2py/uWSGI process quick action.\n\n### Notes\n\n- The dashboard does not scrape data from `htop`; it runs direct non-interactive shell commands and parses the results.\n- This makes the dashboard more useful for quick alerts and summaries.\n- `htop` and `uwsgitop` remain available as Quick Commands for live terminal monitoring.\n\n---\n\n\n---\n\n## v1.4.1 - Web Host Monitoring Dashboard Upgrade\n\n### Added\n\n- Overall Web Host Risk card.\n- 502 / Gateway Risk card.\n- Swap Usage card.\n- Disk Web2py card.\n- Web Connections card.\n- Active Users / IPs card.\n- Login/User Events card.\n- uWSGI Workers card using `/tmp/stats.socket` when available.\n- uWSGI Health card with exceptions, harakiri, respawns, RSS, and average response time when available.\n- Nginx Status card.\n- Web2py/uWSGI CPU card.\n- Monitoring quick actions for 502/gateway checks, connection checks, and active user/client IP checks.\n\n### Improved\n\n- Dashboard now evaluates conditions that can lead to web host instability or 502 Bad Gateway responses.\n- Monitoring health command now checks Linux load, memory, swap, disk, connections, Nginx logs, Web2py logs, and uWSGI worker saturation.\n- Web2py logs are scanned for recent errors, tracebacks, exceptions, tickets, failed events, login/auth/user events, and client IP load.\n- Nginx logs are scanned for 502/504, bad gateway, upstream timeout, upstream prematurely closed connection, refused connections, and no live upstreams.\n- Worker saturation warnings are based on busy/total uWSGI worker ratio when stats socket data is available.\n\n### Purpose\n\nHelp detect early warning signs before the web server reaches a state where users begin seeing `502 Bad Gateway`, Nginx upstream errors, overloaded workers, or resource saturation on Linux.\n\n---\n\n# Current Stable Version\n\n```text\nv1.4.1\n```\n\n---\n\n# Full Version Summary\n\n| Version | Summary |\n|---|---|\n| v1.0 | Initial embedded SSH GUI with saved profiles and basic console opening |\n| v1.1 | Tab rename, tab close, reconnect |\n| v1.2 | Quick Commands |\n| v1.3 | Modern CustomTkinter UI refresh |\n| v1.3.1 | Fixed CustomTkinter scrollable sidebar crash |\n| v1.3.2 | Safer tab close handling |\n| v1.3.3 | Full tab destruction fix and ANSI color support |\n| v1.3.4 | Connection status indicator |\n| v1.3.5 | High-contrast terminal color fix |\n| v1.3.6 | Focus, close, toolbar, and quick command behavior fixes |\n| v1.3.7 | Built-in README and version history viewer |\n| v1.3.8 | Smart grid split layouts for 3 and 4 panes |\n| v1.3.9 | Layout Manager controls for 2, 3, and 4 pane layouts |\n| v1.4.0 | Web2py Monitoring Dashboard |\n| v1.4.1 | Web Host Monitoring Dashboard upgrade |', 'VERSION_HISTORY_Embedded_SSH_Launcher.md': '# Embedded SSH Console Launcher - Version History\n\nThis file tracks the project evolution from the first working concept through the current stable version.\n\n---\n\n## v1.0 - Initial Working GUI\n\n### Goal\n\nCreate a small Windows GUI that can save SSH connection information and open SSH consoles quickly.\n\n### Main Features\n\n- Tkinter-based GUI.\n- Save SSH profiles.\n- Store host, user, port, and password.\n- Open SSH sessions using `plink.exe`.\n- Support opening multiple consoles.\n- Basic tab and split-pane workflow.\n- Automatic password login.\n- Basic terminal output display.\n\n### Notes\n\nThis version proved that the core workflow was possible:\n\n```text\nSave profile -> Select profile -> Open console quickly\n```\n\n---\n\n## v1.1 - Tabs, Rename, Close, and Reconnect\n\n### Added\n\n- Rename current tab.\n- Double-click tab to rename.\n- `×` symbol in tab title.\n- Click `×` to close a tab.\n- Reconnect button per console.\n- Reconnect selected console from the sidebar.\n- Better session lifecycle handling.\n\n### Fixed / Improved\n\n- Added better control over individual SSH panes.\n- Added reconnect behavior without needing to close and reopen the whole app.\n\n---\n\n## v1.2 - Quick Commands\n\n### Added\n\n- Quick Commands section.\n- Add custom command buttons.\n- Edit saved commands.\n- Delete saved commands.\n- Run command in focused terminal.\n- General Clear Console command.\n- Default commands:\n  - `htop`\n  - `cd /home/www-data/web2py/`\n  - `tail -f web2py.log`\n  - `sudo uwsgitop /tmp/stats.socket`\n  - `clear`\n\n### Files Added\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\commands.json\n```\n\n### Purpose\n\nReduce repetitive typing for common admin commands.\n\n---\n\n## v1.3 - Modern UI Refresh\n\n### Added\n\n- CustomTkinter UI.\n- Modern dark theme.\n- Rounded buttons.\n- Better sidebar layout.\n- Top toolbar.\n- Modern connection/profile form.\n- Quick command buttons instead of only listbox style.\n- Improved spacing.\n- Status bar.\n- Active terminal visual highlight.\n\n### Dependencies Added\n\n```powershell\npip install customtkinter\n```\n\n### Notes\n\nThis version modernized the appearance while keeping the working SSH and terminal backend.\n\n---\n\n## v1.3.1 - CustomTkinter Startup Fix\n\n### Fixed\n\n- `CTkScrollableFrame.grid_propagate(False)` startup crash.\n\n### Cause\n\n`CTkScrollableFrame.grid_propagate()` does not accept `False` like a normal Tkinter frame.\n\n### Fix\n\nUse:\n\n```python\nself.sidebar.configure(width=320)\n```\n\ninstead of:\n\n```python\nself.sidebar.grid_propagate(False)\n```\n\nfor CustomTkinter scrollable frames.\n\n---\n\n## v1.3.2 - Safer Tab Close Handling\n\n### Fixed\n\n- Accidental tab closing when clicking or selecting terminal text.\n- Fake `×` tab close area was too aggressive.\n\n### Added\n\n- Press/release tracking for tab close.\n- Smaller close zone.\n- Close only if press and release both happen on the `×` area.\n- Ignore drag/focus/select actions.\n\n### Methods Added / Updated\n\n- `get_tab_close_candidate`\n- `on_notebook_button_press`\n- `on_notebook_button_release`\n\n---\n\n## v1.3.3 - Tab Destruction and Terminal Color Support\n\n### Fixed\n\n- Closed tabs could remain visible or not disappear.\n- Notebook tab was being forgotten but not fully destroyed.\n- Old tab references could remain in memory.\n- SSH processes could remain alive after closing a tab.\n\n### Improved\n\n- Fully destroy tab frame after closing.\n- Close all SSH panes inside a tab before removing the tab.\n- Clear active/focused terminal references when closing tabs.\n- Delay close using `after(1, ...)` so notebook finishes processing click events first.\n\n### Added\n\n- ANSI terminal color support using `pyte` character attributes.\n- Text tags for terminal foreground/background colors.\n- Support for bold, underline, reverse video, and cursor highlighting.\n\n---\n\n## v1.3.4 - Connection Status Indicator\n\n### Added\n\n- Connection status indicator per terminal:\n  - `● Connected`\n  - `● Connecting`\n  - `● Disconnected`\n- Status color:\n  - Green for connected\n  - Orange for connecting\n  - Red for disconnected\n\n### Improved\n\n- SSH sessions are checked periodically.\n- Dropped connections are shown visually.\n- Reconnect changes status back through connecting to connected.\n\n### Purpose\n\nMake it obvious when a terminal session needs reconnecting.\n\n---\n\n## v1.3.5 - High Contrast Terminal Colors\n\n### Fixed\n\n- Some `htop` and `uwsgitop` colors were too dark.\n- Processor numbers, users, and dim values were hard to read.\n\n### Improved\n\n- Dark gray / black foreground values are remapped to readable light gray/white.\n- Contrast protection checks foreground/background contrast.\n- If contrast is too low, text is forced brighter.\n\n### Purpose\n\nImprove readability of colored terminal applications on black background.\n\n---\n\n## v1.3.6 - Focus, Close, and Quick Command Behavior Fixes\n\n### Fixed\n\n- Quick Commands were sometimes sent to the wrong terminal.\n- Focus button did not correctly make a terminal active.\n- Top toolbar buttons did not always act on the correct terminal.\n- Close button inside a terminal closed the pane but did not destroy the tab when it was the last terminal.\n- App could keep references to closed terminals.\n- Active terminal highlighting could become stale.\n\n### Improved\n\n- Focus now updates:\n  - Current terminal\n  - Current tab\n  - App-level focused terminal reference\n  - Active visual state\n- Quick commands now send to the actual focused terminal.\n- Top toolbar actions now use the focused terminal or current tab correctly.\n- Closing the last terminal in a tab closes and destroys the entire tab.\n- Console cleanup is more complete.\n\n### Current Status\n\nThis is the current stable version.\n\n---\n\n## v1.3.7 - Built-in Documentation Viewer\n\n### Added\n\n- Built-in documentation viewer inside the app.\n- Documentation section in the sidebar.\n- In-app Markdown rendering for README and VERSION_HISTORY files.\n- Search box inside the documentation viewer.\n- Reload documentation button.\n- Open documentation folder button.\n- PyInstaller-compatible document discovery.\n- Embedded fallback Markdown content when external files are not found.\n\n### Improved\n\n- The app can now ship with its own documentation as part of the Windows `.exe` build.\n\n---\n\n## v1.3.8 - Smart Grid Split Layouts\n\n### Fixed\n\n- Open 3 Split no longer creates a long single-line layout.\n- Open 4 Split no longer creates four narrow vertical panes.\n\n### Added / Improved\n\n- Open 3 Split now creates two panes on the top row and one full-width pane on the bottom row.\n- Open 4 Split now creates a 2 x 2 square grid.\n- Manual Vertical Split and Horizontal Split actions still work and can override the auto-grid layout.\n- Pane cleanup was adjusted to work with the new grid layout system.\n\n---\n\n## v1.3.9 - Layout Manager\n\n### Added\n\n- Explicit Layout Manager buttons in the sidebar.\n- 2-pane side-by-side layout.\n- 2-pane stacked layout.\n- 3-pane layout with two panes on top and one full-width pane on the bottom.\n- 3-pane layout with one full-width pane on top and two panes on the bottom.\n- 4-pane 2 x 2 grid layout.\n- Auto Layout mode to choose the best layout based on pane count.\n\n### Improved\n\n- Existing panes can now be rearranged without reopening SSH sessions.\n- Open 3 Split and Open 4 Split still default to the smart layouts introduced in v1.3.8.\n- Manual layout controls are now clearer and more specific than the old Vertical/Horizontal split buttons.\n\n---\n\n## v1.4.0 - Web2py Monitoring Dashboard\n\n### Added\n\n- Monitoring Dashboard window.\n- Server health check using non-interactive SSH command execution.\n- CPU/load card.\n- RAM card.\n- Disk `/` card.\n- Web2py process card.\n- uWSGI process card.\n- Recent error count card.\n- Top CPU process card.\n- Top memory process card.\n- Auto-refresh controls.\n- Monitoring sidebar section.\n- Health check quick action.\n- Recent errors quick action.\n- Web2py/uWSGI process quick action.\n\n### Notes\n\n- The dashboard does not scrape data from `htop`; it runs direct non-interactive shell commands and parses the results.\n- This makes the dashboard more useful for quick alerts and summaries.\n- `htop` and `uwsgitop` remain available as Quick Commands for live terminal monitoring.\n\n---\n\n\n---\n\n## v1.4.1 - Web Host Monitoring Dashboard Upgrade\n\n### Added\n\n- Overall Web Host Risk card.\n- 502 / Gateway Risk card.\n- Swap Usage card.\n- Disk Web2py card.\n- Web Connections card.\n- Active Users / IPs card.\n- Login/User Events card.\n- uWSGI Workers card using `/tmp/stats.socket` when available.\n- uWSGI Health card with exceptions, harakiri, respawns, RSS, and average response time when available.\n- Nginx Status card.\n- Web2py/uWSGI CPU card.\n- Monitoring quick actions for 502/gateway checks, connection checks, and active user/client IP checks.\n\n### Improved\n\n- Dashboard now evaluates conditions that can lead to web host instability or 502 Bad Gateway responses.\n- Monitoring health command now checks Linux load, memory, swap, disk, connections, Nginx logs, Web2py logs, and uWSGI worker saturation.\n- Web2py logs are scanned for recent errors, tracebacks, exceptions, tickets, failed events, login/auth/user events, and client IP load.\n- Nginx logs are scanned for 502/504, bad gateway, upstream timeout, upstream prematurely closed connection, refused connections, and no live upstreams.\n- Worker saturation warnings are based on busy/total uWSGI worker ratio when stats socket data is available.\n\n### Purpose\n\nHelp detect early warning signs before the web server reaches a state where users begin seeing `502 Bad Gateway`, Nginx upstream errors, overloaded workers, or resource saturation on Linux.\n\n---\n\n# Current Stable Version\n\n```text\nv1.4.1\n```\n\n---\n\n# Full Version Summary\n\n| Version | Summary |\n|---|---|\n| v1.0 | Initial embedded SSH GUI with saved profiles and basic console opening |\n| v1.1 | Tab rename, tab close, reconnect |\n| v1.2 | Quick Commands |\n| v1.3 | Modern CustomTkinter UI refresh |\n| v1.3.1 | Fixed CustomTkinter scrollable sidebar crash |\n| v1.3.2 | Safer tab close handling |\n| v1.3.3 | Full tab destruction fix and ANSI color support |\n| v1.3.4 | Connection status indicator |\n| v1.3.5 | High-contrast terminal color fix |\n| v1.3.6 | Focus, close, toolbar, and quick command behavior fixes |\n| v1.3.7 | Built-in README and version history viewer |\n| v1.3.8 | Smart grid split layouts for 3 and 4 panes |\n| v1.3.9 | Layout Manager controls for 2, 3, and 4 pane layouts |\n| v1.4.0 | Web2py Monitoring Dashboard |\n| v1.4.1 | Web Host Monitoring Dashboard upgrade |', 'FEATURES_PLAN.md': '# FEATURES_PLAN.md\n\n# Embedded SSH Console Launcher - Future Features Plan\n\n**Current stable version:** v1.4.1  \n**Planning document created for:** local Git/project tracking\n\nThis document tracks future improvements, proposed versions, and implementation ideas for the Embedded SSH Console Launcher app.\n\n---\n\n## Current App Status\n\nThe app currently supports:\n\n- Saved SSH profiles\n- Automatic login through `plink.exe`\n- Embedded SSH terminals\n- Tabs\n- Split panes\n- Smart split layouts for 3 and 4 panes\n- Quick command buttons\n- Modern CustomTkinter UI\n- Terminal ANSI color support\n- High-contrast terminal colors\n- Connection status indicators\n- Built-in documentation viewer\n- README and VERSION_HISTORY Markdown files\n- PyInstaller packaging support\n\n---\n\n## v1.3.9 - Layout Manager ✅ Implemented\n\n### Goal\n\nImprove split-pane control and make layouts easier to manage.\n\n### Planned Features\n\n- Add explicit layout buttons:\n  - 1 pane\n  - 2 vertical\n  - 2 horizontal\n  - 3 layout: 2 top / 1 bottom\n  - 3 layout: 1 top / 2 bottom\n  - 4 layout: 2 x 2 grid\n- Allow changing the current tab layout after consoles are already open.\n- Allow moving panes between layout positions.\n- Add visual labels or borders for active pane position.\n\n### Notes\n\nThis is the most logical next step because split panes are central to the workflow.\n\n---\n\n## v1.4.0 - Web2py Monitoring Dashboard ✅ Implemented\n\n### Goal\n\nAdd a monitoring dashboard focused on Web2py/uWSGI server health instead of relying only on visual terminal tools like `htop` and `uwsgitop`.\n\n### Planned Features\n\n- Health Check button.\n- CPU, RAM, Disk, and Load cards.\n- Web2py process count card.\n- uWSGI process/status card.\n- Recent errors and tracebacks quick checks.\n- Optional auto-refresh interval.\n- Warning/critical thresholds.\n\n### Possible Commands\n\n```bash\nuptime\nfree -m\ndf -h /\npgrep -af web2py | wc -l\npgrep -af uwsgi | wc -l\ngrep -i error web2py.log | tail -n 50\ngrep -i traceback web2py.log | tail -n 50\n```\n\n### Implemented in v1.4.0\n\n- Monitoring Dashboard window.\n- Server health check using non-interactive SSH command execution.\n- CPU/load, RAM, Disk, Web2py, uWSGI, Recent Errors, Top CPU, and Top Memory cards.\n- Auto-refresh controls.\n- Monitoring sidebar section.\n- Health check, recent errors, and Web2py/uWSGI process quick actions.\n\n### Notes\n\nThe dashboard executes non-interactive commands and parses the results into cards. It does not try to scrape values from the `htop` screen.\n\n---\n\n\n---\n\n## v1.4.1 - Web Host Monitoring Dashboard Upgrade ✅ Implemented\n\n### Goal\n\nImprove the dashboard so it can identify web host instability, overloaded workers, excessive user/client traffic, connection spikes, and possible 502 Bad Gateway conditions.\n\n### Implemented\n\n- Overall Web Host Risk card.\n- 502 / Gateway Risk detection.\n- Connection load detection.\n- Active users/client IP estimation from Web2py logs.\n- Login/user event count from Web2py logs.\n- Nginx status and Nginx gateway/upstream log checks.\n- uWSGI worker saturation detection from `/tmp/stats.socket` when available.\n- uWSGI exceptions, harakiri, respawn, RSS, and average response time checks.\n- Web2py/uWSGI top CPU view.\n- Monitoring quick buttons for gateway, connections, users/IPs, errors, and processes.\n\n### Next Monitoring Improvements\n\n- Make thresholds configurable per profile.\n- Add persistent monitoring history.\n- Add popup alerts when risk becomes critical.\n- Add per-profile Web2py path and uWSGI socket settings.\n\n---\n\n## v1.4.2 - Monitoring Alerts and Threshold Settings\n\n### Goal\n\nMake the Monitoring Dashboard more actionable by adding configurable thresholds and clearer warnings.\n\n### Planned Features\n\n- Configurable warning and critical thresholds.\n- CPU/load thresholds.\n- RAM thresholds.\n- Disk thresholds.\n- Recent error thresholds.\n- Visual alert banner.\n- Optional popup notification for critical states.\n\n---\n\n## v1.4.2 - Command Groups\n\n### Goal\n\nOrganize Quick Commands into categories instead of one long list.\n\n### Planned Groups\n\n- Monitoring\n- Web2py\n- Logs\n- Services\n- Database\n- Docker\n- Custom\n\n### Planned Features\n\n- Add command group selector.\n- Save command groups to `commands.json`.\n- Let each command belong to a group.\n- Filter visible quick commands by selected group.\n- Add group management:\n  - Add group\n  - Rename group\n  - Delete group\n\n---\n\n## v1.4.3 - Run Command on Multiple Panes\n\n### Goal\n\nAllow commands to be executed across multiple terminals.\n\n### Planned Features\n\nRun command on:\n\n- Focused terminal only\n- All panes in current tab\n- All tabs\n- Selected panes only\n\n### Safety Options\n\n- Confirm before running on multiple panes.\n- Highlight target panes before sending command.\n- Add a setting for command execution mode:\n  - Run immediately\n  - Paste only\n  - Ask before run\n\n---\n\n## v1.4.4 - Auto Layout per Profile\n\n### Goal\n\nAllow a saved SSH profile to automatically open with a predefined layout.\n\n### Planned Features\n\nProfile settings:\n\n- Default layout:\n  - 1 pane\n  - 2 panes\n  - 3 panes\n  - 4 panes\n- Default commands per pane.\n- Open profile and automatically run:\n  - `htop`\n  - `tail -f web2py.log`\n  - `sudo uwsgitop /tmp/stats.socket`\n  - custom commands\n\n### Example\n\nA profile could open 4 panes automatically:\n\n| Pane | Command |\n|---|---|\n| Top left | `htop` |\n| Top right | `tail -f web2py.log` |\n| Bottom left | `sudo uwsgitop /tmp/stats.socket` |\n| Bottom right | shell prompt |\n\n---\n\n## v1.4.5 - Auto Reconnect\n\n### Goal\n\nReconnect dropped SSH sessions automatically or semi-automatically.\n\n### Planned Features\n\n- Per-profile auto reconnect setting.\n- Global auto reconnect setting.\n- Retry interval setting.\n- Max retry count.\n- Visual retry counter.\n- Status messages:\n  - Disconnected\n  - Reconnecting\n  - Retry failed\n  - Reconnected\n\n### Safety\n\nAuto reconnect should be optional because some commands may not resume safely.\n\n---\n\n## v1.4.6 - Export / Import\n\n### Goal\n\nMake it easy to move settings between PCs.\n\n### Planned Features\n\nExport:\n\n- Profiles without passwords\n- Profiles with encrypted backup option\n- Commands\n- Layouts\n- App settings\n\nImport:\n\n- Merge with existing config\n- Replace existing config\n- Preview import before applying\n\n### Files\n\nPossible export format:\n\n```text\nssh_launcher_backup.json\n```\n\n---\n\n## v1.5.0 - SSH Key Support\n\n### Goal\n\nSupport safer authentication through SSH keys.\n\n### Planned Features\n\n- Add key file field to profile.\n- Support `.ppk` for PuTTY/plink.\n- Support OpenSSH private key if using Windows OpenSSH later.\n- Support passphrase prompt.\n- Allow password or key auth per profile.\n\n### Benefits\n\n- Better security.\n- Faster login.\n- Less reliance on saved passwords.\n\n---\n\n## v1.5.1 - Session Logging\n\n### Goal\n\nAllow terminal output to be saved locally.\n\n### Planned Features\n\n- Enable/disable logging per terminal.\n- Save logs by date/profile/tab.\n- Add log folder shortcut.\n- Add log retention setting.\n- Optional command history file.\n\n### Example Path\n\n```text\n%APPDATA%\\EmbeddedSSHLauncher\\logs\\\n```\n\n---\n\n## v1.5.2 - Terminal Search\n\n### Goal\n\nSearch inside terminal output.\n\n### Planned Features\n\n- Search text in focused terminal.\n- Highlight matches.\n- Next / previous result.\n- Case-sensitive toggle.\n- Regex toggle.\n\n---\n\n## v1.6.0 - Packaged Windows App / Installer\n\n### Goal\n\nMake deployment easier.\n\n### Planned Features\n\n- One-click build script.\n- Include `plink.exe`.\n- Include README and VERSION_HISTORY.\n- Include app icon.\n- Create Start Menu shortcut.\n- Optional installer using Inno Setup or NSIS.\n\n### Recommended Build Command\n\n```powershell\npyinstaller --onefile --windowed `\n  --add-binary "plink.exe;." `\n  --add-data "README_Embedded_SSH_Launcher.md;." `\n  --add-data "VERSION_HISTORY_Embedded_SSH_Launcher.md;." `\n  SSH_Console_Launcher_v1_3_8.py\n```\n\n---\n\n## v2.0.0 - Full Terminal Engine Upgrade\n\n### Goal\n\nReplace `tk.Text + pyte` terminal rendering with a more complete terminal frontend.\n\n### Possible Approaches\n\n- WebView + xterm.js\n- Qt + terminal widget\n- Embedded Windows Terminal approach if possible\n- Dedicated terminal emulator component\n\n### Benefits\n\n- Better `vim`, `nano`, `htop`, mouse support, colors, resizing, alternate screen behavior.\n- More accurate terminal emulation.\n\n### Notes\n\nThis is a larger architecture change and should be considered after the current Tk/CustomTkinter version is stable.\n\n---\n\n# Priority Recommendation\n\nRecommended next development order:\n\n1. v1.4.1 - Monitoring Alerts and Threshold Settings\n2. v1.4.2 - Command Groups\n3. v1.4.3 - Run Command on Multiple Panes\n4. v1.4.4 - Auto Layout per Profile\n5. v1.4.5 - Auto Reconnect\n6. v1.4.6 - Export / Import\n7. v1.5.0 - SSH Key Support\n8. v1.6.0 - Packaged Installer\n9. v2.0.0 - Full Terminal Engine Upgrade\n\n---\n\n# Backlog Ideas\n\n- App settings page.\n- Theme selector.\n- Font size selector.\n- Terminal font selector.\n- Save window size and position.\n- Save last opened tabs.\n- Confirm before closing active sessions.\n- Add keyboard shortcuts.\n- Add command search.\n- Add profile search.\n- Add profile folders/groups.\n- Add environment variables per profile.\n- Add per-profile notes.\n- Add documentation search improvements.\n- Add update checker if published in Git.'}
@@ -325,6 +456,24 @@ def find_document_path(filename: str) -> Path | None:
         for candidate in candidates:
             if candidate.exists() and candidate.is_file():
                 return candidate
+
+    return None
+
+
+def find_image_path(filename: str) -> Path | None:
+    """Find a bundled or external image asset (icon/logo) under image/."""
+    resource_dir = pyinstaller_resource_dir()
+
+    candidates = [app_base_dir() / "image" / filename]
+
+    if resource_dir is not None:
+        candidates.append(resource_dir / "image" / filename)
+
+    candidates.append(app_base_dir() / filename)
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
 
     return None
 
@@ -447,6 +596,29 @@ class CommandStore:
         )
 
 
+class UIState:
+    """Small persisted UI preferences (currently just the sidebar width)."""
+
+    @staticmethod
+    def load_sidebar_width() -> int:
+        if not UI_STATE_FILE.exists():
+            return DEFAULT_SIDEBAR_WIDTH
+        try:
+            raw = json.loads(UI_STATE_FILE.read_text(encoding="utf-8"))
+            width = int(raw.get("sidebar_width", DEFAULT_SIDEBAR_WIDTH))
+            return max(MIN_SIDEBAR_WIDTH, min(MAX_SIDEBAR_WIDTH, width))
+        except Exception:
+            return DEFAULT_SIDEBAR_WIDTH
+
+    @staticmethod
+    def save_sidebar_width(width: int) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            UI_STATE_FILE.write_text(json.dumps({"sidebar_width": width}, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
 class PasswordStore:
     @staticmethod
     def key(profile_name: str) -> str:
@@ -480,6 +652,22 @@ class PasswordStore:
             pass
 
 
+def center_toplevel(dialog: tk.Widget, parent: tk.Widget, width: int, height: int) -> None:
+    """Position a Toplevel centered over its parent, clamped to the screen bounds."""
+    try:
+        parent.update_idletasks()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        x = px + max(0, (pw - width) // 2)
+        y = py + max(0, (ph - height) // 2)
+        screen_w, screen_h = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+        x = min(max(0, x), max(0, screen_w - width))
+        y = min(max(0, y), max(0, screen_h - height))
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+    except Exception:
+        dialog.geometry(f"{width}x{height}")
+
+
 def ask_text(
     parent: tk.Widget,
     title: str,
@@ -489,7 +677,7 @@ def ask_text(
 ) -> str | None:
     dialog = ctk.CTkToplevel(parent) if ctk is not None else tk.Toplevel(parent)
     dialog.title(title)
-    dialog.geometry("460x180")
+    center_toplevel(dialog, parent, 460, 180)
     dialog.resizable(False, False)
     dialog.transient(parent)
     dialog.grab_set()
@@ -561,6 +749,114 @@ def ask_text(
     return value
 
 
+_MESSAGE_KIND_STYLE = {
+    "info": (ACCENT, ACCENT_HOVER, "ℹ"),
+    "warning": (WARNING, WARNING_HOVER, "⚠"),
+    "error": (DANGER, DANGER_HOVER, "✕"),
+    "confirm": (WARNING, WARNING_HOVER, "?"),
+}
+
+
+def show_message(parent: tk.Widget, kind: str, title: str, text: str) -> bool | None:
+    """Dark-themed replacement for tkinter.messagebox.
+
+    kind is one of "info"/"warning"/"error"/"confirm". Returns True/False for
+    "confirm" (Cancel or closing the window both mean False, mirroring
+    messagebox.askyesno's falsy-on-cancel behavior); returns None otherwise.
+    """
+    accent, accent_hover, icon = _MESSAGE_KIND_STYLE.get(kind, _MESSAGE_KIND_STYLE["info"])
+    is_confirm = kind == "confirm"
+
+    if ctk is None:
+        if is_confirm:
+            return messagebox.askyesno(title, text, parent=parent)
+        {"info": messagebox.showinfo, "warning": messagebox.showwarning, "error": messagebox.showerror}.get(
+            kind, messagebox.showinfo
+        )(title, text, parent=parent)
+        return None
+
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title(title)
+    width, height = 440, 200
+    center_toplevel(dialog, parent, width, height)
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    dialog.configure(fg_color=BG)
+    dialog.grab_set()
+
+    result: dict[str, bool | None] = {"value": False if is_confirm else None}
+
+    frame = ctk.CTkFrame(dialog, fg_color=PANEL, corner_radius=16)
+    frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+    header = ctk.CTkFrame(frame, fg_color="transparent")
+    header.pack(fill="x", padx=16, pady=(16, 8))
+    ctk.CTkLabel(
+        header,
+        text=icon,
+        text_color=accent,
+        font=ctk.CTkFont(size=20, weight="bold"),
+        width=28,
+    ).pack(side="left")
+    ctk.CTkLabel(
+        header,
+        text=title,
+        text_color=TEXT,
+        font=ctk.CTkFont(size=14, weight="bold"),
+    ).pack(side="left", padx=(6, 0))
+
+    ctk.CTkLabel(
+        frame,
+        text=text,
+        text_color=TEXT,
+        font=ctk.CTkFont(size=13),
+        wraplength=width - 64,
+        justify="left",
+    ).pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+    button_row = ctk.CTkFrame(frame, fg_color="transparent")
+    button_row.pack(fill="x", padx=16, pady=(0, 16))
+
+    def close(value: bool | None) -> None:
+        result["value"] = value
+        dialog.destroy()
+
+    if is_confirm:
+        ctk.CTkButton(
+            button_row,
+            text="No",
+            command=lambda: close(False),
+            fg_color=CARD,
+            hover_color=CARD_HOVER,
+            text_color=TEXT,
+            width=90,
+        ).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            button_row,
+            text="Yes",
+            command=lambda: close(True),
+            fg_color=accent,
+            hover_color=accent_hover,
+            width=90,
+        ).pack(side="right")
+    else:
+        ctk.CTkButton(
+            button_row,
+            text="OK",
+            command=lambda: close(None),
+            fg_color=accent,
+            hover_color=accent_hover,
+            width=90,
+        ).pack(side="right")
+
+    dialog.protocol("WM_DELETE_WINDOW", lambda: close(False if is_confirm else None))
+    dialog.bind("<Return>", lambda _event: close(True if is_confirm else None))
+    dialog.bind("<Escape>", lambda _event: close(False if is_confirm else None))
+    dialog.focus_set()
+    dialog.wait_window()
+    return result["value"]
+
+
 class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
     def __init__(self, parent: tk.Widget, initial_file: str = DOC_README_FILE):
         super().__init__(parent)
@@ -571,7 +867,7 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
         self.search_var = tk.StringVar()
 
         self.title("Documentation")
-        self.geometry("1050x760")
+        center_toplevel(self, parent, 1050, 760)
         self.minsize(820, 560)
         self.transient(parent)
 
@@ -653,10 +949,10 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
         self.text = tk.Text(
             body,
             wrap="word",
-            bg="#0b1220",
+            bg=PANEL_DARK,
             fg=TEXT,
             insertbackground=TEXT,
-            selectbackground="#334155",
+            selectbackground=CARD_HOVER,
             font=("Segoe UI", 11),
             padx=24,
             pady=18,
@@ -681,15 +977,7 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
 
     def _doc_button(self, parent: tk.Widget, text: str, command, color: str):
         if ctk is not None:
-            return ctk.CTkButton(
-                parent,
-                text=text,
-                command=command,
-                fg_color=color,
-                hover_color=CARD_HOVER if color in {CARD, CARD_HOVER} else color,
-                height=34,
-                corner_radius=10,
-            )
+            return build_button(parent, text, command, color)
         return ttk.Button(parent, text=text, command=command)
 
     def configure_markdown_tags(self) -> None:
@@ -699,12 +987,12 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
         self.text.tag_configure("normal", font=("Segoe UI", 11), foreground=TEXT, spacing1=2, spacing3=5)
         self.text.tag_configure("muted", foreground=MUTED)
         self.text.tag_configure("bullet", lmargin1=32, lmargin2=48, foreground=TEXT, spacing3=3)
-        self.text.tag_configure("code", font=("Cascadia Mono", 10), foreground="#e2e8f0", background="#111827", lmargin1=18, lmargin2=18, spacing1=3, spacing3=3)
-        self.text.tag_configure("inline_code", font=("Cascadia Mono", 10), foreground="#fef08a")
-        self.text.tag_configure("rule", foreground="#475569", spacing1=8, spacing3=8)
-        self.text.tag_configure("table", font=("Cascadia Mono", 10), foreground="#d1d5db", background="#111827", spacing1=2, spacing3=2)
-        self.text.tag_configure("quote", foreground="#cbd5e1", background="#172033", lmargin1=20, lmargin2=30, spacing1=4, spacing3=4)
-        self.text.tag_configure("search", background="#facc15", foreground="#111827")
+        self.text.tag_configure("code", font=("Cascadia Mono", 10), foreground="#e2e8f0", background=PANEL, lmargin1=18, lmargin2=18, spacing1=3, spacing3=3)
+        self.text.tag_configure("inline_code", font=("Cascadia Mono", 10), foreground=HIGHLIGHT_CODE)
+        self.text.tag_configure("rule", foreground=CARD_HOVER_2, spacing1=8, spacing3=8)
+        self.text.tag_configure("table", font=("Cascadia Mono", 10), foreground="#d1d5db", background=PANEL, spacing1=2, spacing3=2)
+        self.text.tag_configure("quote", foreground="#cbd5e1", background=PANEL_QUOTE, lmargin1=20, lmargin2=30, spacing1=4, spacing3=4)
+        self.text.tag_configure("search", background=HIGHLIGHT_SEARCH, foreground=PANEL)
 
     def load_document(self, filename: str) -> None:
         self.current_file = filename
@@ -821,11 +1109,11 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
         try:
             os.startfile(folder)  # type: ignore[attr-defined]
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Could not open documentation folder.\n\n{exc}")
+            show_message(self, "error", APP_NAME, f"Could not open documentation folder.\n\n{exc}")
 
     def export_docs_to_config(self) -> None:
         write_embedded_docs_to_config()
-        messagebox.showinfo(APP_NAME, f"Documentation exported to:\n\n{CONFIG_DIR}")
+        show_message(self, "info", APP_NAME, f"Documentation exported to:\n\n{CONFIG_DIR}")
         self.status_var.set(f"Documentation exported to {CONFIG_DIR}")
 
 
@@ -849,6 +1137,9 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.last_metrics: dict[str, str] = {}
 
         self.card_labels: dict[str, dict[str, object]] = {}
+
+        self._current_columns = 4
+        self._regrid_after_id: str | None = None
 
         self._build_ui()
         self.refresh_dashboard()
@@ -887,10 +1178,12 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, padx=18, pady=12, sticky="e")
 
-        ctk.CTkButton(actions, text="Refresh", command=self.refresh_dashboard, fg_color=ACCENT, hover_color=ACCENT_HOVER, width=90).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="Run in Terminal", command=self.run_health_command_in_terminal, fg_color=CARD_HOVER, hover_color=ACCENT_HOVER, width=120).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="502 Check", command=self.run_gateway_check_in_terminal, fg_color=WARNING, hover_color="#92400e", width=95).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="Close", command=self.destroy, fg_color=DANGER, hover_color="#991b1b", width=80).pack(side="left", padx=4)
+        build_button(actions, "Refresh", self.refresh_dashboard, ACCENT, width=90).pack(side="left", padx=4)
+        build_button(actions, "Run in Terminal", self.run_health_command_in_terminal, CARD_HOVER, width=120).pack(side="left", padx=4)
+        build_button(actions, "502 Check", self.run_gateway_check_in_terminal, WARNING, width=95).pack(side="left", padx=4)
+        self.close_button = build_button(actions, "Close", self.on_close, DANGER, width=80)
+        self.close_button.pack(side="left", padx=4)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         auto = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=14)
         auto.grid(row=1, column=0, sticky="ew", padx=14, pady=(12, 8))
@@ -908,9 +1201,10 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
 
         body = ctk.CTkScrollableFrame(root, fg_color=BG)
         body.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
-        body.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        body.grid_columnconfigure(tuple(range(self._current_columns)), weight=1)
 
         self.cards_frame = body
+        body.bind("<Configure>", self.on_body_configure)
 
         card_specs = [
             ("overall", "Overall Web Host Risk", "Waiting...", MUTED),
@@ -935,7 +1229,7 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
 
         for idx, (key, title, value, color) in enumerate(card_specs):
             card = ctk.CTkFrame(self.cards_frame, fg_color=CARD, corner_radius=16)
-            card.grid(row=idx // 4, column=idx % 4, sticky="nsew", padx=8, pady=8)
+            card.grid(row=idx // self._current_columns, column=idx % self._current_columns, sticky="nsew", padx=8, pady=8)
             card.grid_columnconfigure(0, weight=1)
 
             title_label = ctk.CTkLabel(card, text=title, text_color=MUTED, font=ctk.CTkFont(size=12, weight="bold"))
@@ -960,9 +1254,45 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             borderwidth=0,
             highlightthickness=0,
         )
-        self.raw_output.grid(row=5, column=0, columnspan=4, sticky="ew", padx=8, pady=(12, 8))
+        self.raw_output.grid(row=len(card_specs) // self._current_columns + 1, column=0, columnspan=self._current_columns, sticky="ew", padx=8, pady=(12, 8))
         self.raw_output.insert("1.0", "Raw health-check output will appear here.\n")
         self.raw_output.configure(state="disabled")
+
+    def on_body_configure(self, event: tk.Event) -> None:
+        """Recompute the card grid's column count from available width.
+
+        Debounced: only re-grids once the width has settled (no re-grid on
+        every pixel of a drag) and only when the column count actually
+        changes, so a resize doesn't thrash the layout.
+        """
+        columns = max(1, min(6, event.width // 260))
+        if columns == self._current_columns:
+            return
+        if self._regrid_after_id is not None:
+            try:
+                self.after_cancel(self._regrid_after_id)
+            except Exception:
+                pass
+        self._regrid_after_id = self.after(120, lambda: self.regrid_cards(columns))
+
+    def regrid_cards(self, columns: int) -> None:
+        self._regrid_after_id = None
+        if not self.winfo_exists():
+            return
+
+        old_columns = self._current_columns
+        self._current_columns = columns
+
+        if old_columns > columns:
+            self.cards_frame.grid_columnconfigure(tuple(range(old_columns)), weight=0)
+        self.cards_frame.grid_columnconfigure(tuple(range(columns)), weight=1)
+
+        for idx, labels in enumerate(self.card_labels.values()):
+            labels["frame"].grid_configure(row=idx // columns, column=idx % columns)
+
+        card_count = len(self.card_labels)
+        if hasattr(self, "raw_output"):
+            self.raw_output.grid_configure(row=card_count // columns + 1, columnspan=columns)
 
     def profile_title(self) -> str:
         if self.profile is None:
@@ -1002,6 +1332,30 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             self.refresh_dashboard()
             self.schedule_auto_refresh()
 
+    def on_close(self) -> None:
+        """Cancel the auto-refresh timer before destroying the window.
+
+        Without this, a pending self.after() from schedule_auto_refresh() can
+        fire after the window (and its widgets) are already destroyed, raising
+        an unhandled TclError from the next refresh_dashboard()/set_status()
+        widget .configure() call.
+        """
+        if self.auto_refresh_after_id is not None:
+            try:
+                self.after_cancel(self.auto_refresh_after_id)
+            except Exception:
+                pass
+            self.auto_refresh_after_id = None
+        if self._regrid_after_id is not None:
+            try:
+                self.after_cancel(self._regrid_after_id)
+            except Exception:
+                pass
+            self._regrid_after_id = None
+        if self.app.monitoring_dashboard is self:
+            self.app.monitoring_dashboard = None
+        self.destroy()
+
     def run_health_command_in_terminal(self) -> None:
         self.app.run_command_on_focused_console(MONITORING_HEALTH_COMMAND)
         self.app.status_var.set("Sent advanced health-check command to focused terminal")
@@ -1012,6 +1366,9 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.app.status_var.set("Sent 502/gateway risk check to focused terminal")
 
     def refresh_dashboard(self) -> None:
+        if not self.winfo_exists():
+            return
+
         self.profile = self.app.get_monitoring_profile()
         if hasattr(self, "profile_label"):
             self.profile_label.configure(text=self.profile_title())
@@ -1026,10 +1383,14 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.app.run_remote_monitoring_command(self.profile, MONITORING_HEALTH_COMMAND, callback=self.on_monitoring_result)
 
     def set_status(self, text: str, color: str = MUTED) -> None:
+        if not self.winfo_exists():
+            return
         if hasattr(self, "status_label"):
             self.status_label.configure(text=text, text_color=color)
 
     def set_cards_loading(self) -> None:
+        if not self.winfo_exists():
+            return
         for labels in self.card_labels.values():
             labels["value"].configure(text="Loading...", text_color=MUTED)
             labels["detail"].configure(text="")
@@ -1058,6 +1419,8 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.set_status("Last refresh completed", SUCCESS)
 
     def update_raw_output(self, output: str) -> None:
+        if not self.winfo_exists():
+            return
         if hasattr(self, "raw_output"):
             self.raw_output.configure(state="normal")
             self.raw_output.delete("1.0", "end")
@@ -1092,12 +1455,16 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         return SUCCESS
 
     def card_color(self, status: str) -> str:
+        # Derived from the same DANGER/WARNING/SUCCESS constants used for the
+        # danger/warning/success buttons and status indicators elsewhere, so
+        # severity coloring stays visually connected instead of being its own
+        # hand-picked mini-palette.
         if status == "critical":
-            return "#451a1a"
+            return tint(DANGER, -0.72)
         if status == "warning":
-            return "#451f03"
+            return tint(WARNING, -0.72)
         if status == "ok":
-            return "#052e16"
+            return tint(SUCCESS, -0.78)
         return CARD
 
     def set_card(self, key: str, value: str, detail: str = "", color: str = TEXT, bg_status: str = "neutral") -> None:
@@ -1323,6 +1690,11 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.proc = None
         self.reader_thread: threading.Thread | None = None
         self.output_queue: queue.Queue[object] = queue.Queue()
+        # Bumped on every start_process()/close_process_only() call. read_loop()
+        # captures the epoch it was started with and checks it before every push
+        # to output_queue, so a reader thread from a session that reconnect()
+        # already tore down can never write stale data/status for the new session.
+        self.session_epoch = 0
 
         self.alive = False
         self.sent_password = False
@@ -1372,44 +1744,20 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             )
             self.status_label.pack(side="left", padx=(8, 4), pady=6)
 
-            ctk.CTkButton(
-                self.header,
-                text="Close",
-                command=self.request_close,
-                width=70,
-                height=28,
-                fg_color=DANGER,
-                hover_color="#991b1b",
+            build_button(
+                self.header, "Close", self.request_close, DANGER, width=70, height=28
             ).pack(side="right", padx=(4, 8), pady=6)
 
-            ctk.CTkButton(
-                self.header,
-                text="Reconnect",
-                command=self.reconnect,
-                width=92,
-                height=28,
-                fg_color=WARNING,
-                hover_color="#92400e",
+            build_button(
+                self.header, "Reconnect", self.reconnect, WARNING, width=92, height=28
             ).pack(side="right", padx=4, pady=6)
 
-            ctk.CTkButton(
-                self.header,
-                text="Clear",
-                command=self.clear_remote_console,
-                width=70,
-                height=28,
-                fg_color=CARD,
-                hover_color=CARD_HOVER,
+            build_button(
+                self.header, "Clear", self.clear_remote_console, CARD, width=70, height=28
             ).pack(side="right", padx=4, pady=6)
 
-            ctk.CTkButton(
-                self.header,
-                text="Focus",
-                command=self.focus_terminal,
-                width=70,
-                height=28,
-                fg_color=ACCENT,
-                hover_color=ACCENT_HOVER,
+            build_button(
+                self.header, "Focus", self.focus_terminal, ACCENT, width=70, height=28
             ).pack(side="right", padx=4, pady=6)
 
             body = ctk.CTkFrame(self, fg_color=TERMINAL_BG, corner_radius=10)
@@ -1489,6 +1837,13 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.text.bind("<End>", lambda event: self.send_special("\x1b[F", event))
         self.text.bind("<Prior>", lambda event: self.send_special("\x1b[5~", event))
         self.text.bind("<Next>", lambda event: self.send_special("\x1b[6~", event))
+
+    def refresh_header_label(self) -> None:
+        """Re-render the pane header from self.profile - call after an in-place profile edit."""
+        if self.title_label is None:
+            return
+        text = f"{self.profile.name}  {self.profile.user}@{self.profile.host}:{self.profile.port}"
+        self.title_label.configure(text=text)
 
     def set_connection_state(self, state: str, message: str | None = None) -> None:
         """Update the visible connection status indicator for this terminal pane."""
@@ -1600,7 +1955,8 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.alive = True
         self.set_connection_state("connected", "Connected")
         self.sent_password = False
-        self.reader_thread = threading.Thread(target=self.read_loop, daemon=True)
+        self.session_epoch += 1
+        self.reader_thread = threading.Thread(target=self.read_loop, args=(self.session_epoch,), daemon=True)
         self.reader_thread.start()
 
         self.after(1200, self.initialize_remote_terminal)
@@ -1614,8 +1970,8 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.send("stty erase ^?\r")
         self.send("clear\r")
 
-    def read_loop(self) -> None:
-        while self.alive and self.proc is not None:
+    def read_loop(self, epoch: int) -> None:
+        while self.alive and self.proc is not None and epoch == self.session_epoch:
             try:
                 data = self.proc.read(4096)
 
@@ -1623,12 +1979,14 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
                     time.sleep(0.02)
                     continue
 
-                self.output_queue.put(data)
+                if epoch != self.session_epoch:
+                    break
+                self.output_queue.put((epoch, data))
             except Exception:
-                if self.alive:
-                    self.output_queue.put(("STATUS", "disconnected", "Disconnected"))
-                    self.output_queue.put("\n[session closed]\n")
-                self.alive = False
+                if self.alive and epoch == self.session_epoch:
+                    self.output_queue.put((epoch, ("STATUS", "disconnected", "Disconnected")))
+                    self.output_queue.put((epoch, "\n[session closed]\n"))
+                    self.alive = False
                 break
 
     def schedule_connection_check(self) -> None:
@@ -1677,9 +2035,21 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
         while True:
             try:
-                data = self.output_queue.get_nowait()
+                item = self.output_queue.get_nowait()
             except queue.Empty:
                 break
+
+            # Every item is (epoch, payload) - see read_loop(). Drop anything
+            # from a reader thread whose session has since been torn down by
+            # reconnect()/close_process_only(), so a straggling stale-epoch
+            # write can never corrupt the current session's terminal output
+            # or connection status (closes the last TOCTOU gap the epoch
+            # check in read_loop can't fully cover on its own).
+            if not (isinstance(item, tuple) and len(item) == 2):
+                continue
+            epoch, data = item
+            if epoch != self.session_epoch:
+                continue
 
             if isinstance(data, tuple) and len(data) >= 3 and data[0] == "STATUS":
                 _kind, state, message = data
@@ -1782,8 +2152,16 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         fg_lum = self.color_luminance(fg)
         bg_lum = self.color_luminance(bg)
 
-        # If foreground is close to the background or very dark, brighten it.
+        # If foreground is close to the background or very dark, brighten it -
+        # but blend the original hue toward white instead of collapsing to a
+        # flat neutral, so red/green/blue status text keeps its color-coded
+        # meaning instead of becoming indistinguishable gray/white.
         if abs(fg_lum - bg_lum) < 65 or fg_lum < 75:
+            blended = tint(fg, 0.6 if bold else 0.4)
+            if abs(self.color_luminance(blended) - bg_lum) >= 65:
+                return blended
+            # Blend didn't gain enough contrast (e.g. fg was already near-white) -
+            # fall back to the previous flat-neutral behavior as a safety net.
             return "#ffffff" if bold else "#e5e7eb"
 
         return fg
@@ -1951,6 +2329,10 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
     def close_process_only(self) -> None:
         self.alive = False
+        # Invalidate the current reader thread's epoch immediately, before the
+        # pty is even closed, so a late read()/exception from it can never be
+        # mistaken for the next session (see read_loop's epoch check).
+        self.session_epoch += 1
 
         if self.flush_after_id is not None:
             try:
@@ -1973,6 +2355,14 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             pass
 
         self.proc = None
+
+        # Belt-and-suspenders: bound wait for the old reader thread to actually
+        # exit its blocking read(), reducing (though the epoch check above is
+        # what makes it safe rather than just probable) the window where two
+        # reader threads could be alive at once.
+        if self.reader_thread is not None and self.reader_thread.is_alive():
+            self.reader_thread.join(timeout=0.3)
+
         self.set_connection_state("disconnected", "Disconnected")
 
     def clear_queue(self) -> None:
@@ -1999,7 +2389,21 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         }:
             return None
 
+        if event.keysym == "Escape":
+            self.send("\x1b")
+            return "break"
+
         if event.char and ord(event.char) >= 32:
+            self.send(event.char)
+            return "break"
+
+        # Any other Ctrl-chord (Ctrl-A/E/U/K/L/R/W/Z, etc.) that doesn't have a
+        # dedicated <Control-x> binding above still lands here as a control
+        # character (ord 1-31) and was previously dropped silently - e.g.
+        # readline shortcuts in bash, or anything a remote app binds to a raw
+        # control code. Ctrl-C/D/V are intercepted earlier by their own more
+        # specific bindings (which return "break"), so they never reach here.
+        if event.char and 0 < ord(event.char) < 32:
             self.send(event.char)
             return "break"
 
@@ -2085,13 +2489,15 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
     def add_console(self, profile: SSHProfile) -> None:
         if len(self.panes) >= MAX_PANES_PER_TAB:
-            messagebox.showwarning(APP_NAME, f"Maximum {MAX_PANES_PER_TAB} consoles per tab.")
+            show_message(self, "warning", APP_NAME, f"Maximum {MAX_PANES_PER_TAB} consoles per tab.")
             return
 
         plink_path = self.app.find_plink()
 
         if not plink_path:
-            messagebox.showerror(
+            show_message(
+                self,
+                "error",
                 APP_NAME,
                 "plink.exe was not found. Place plink.exe beside this app or install PuTTY and add it to PATH.",
             )
@@ -2112,13 +2518,15 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
             try:
                 PasswordStore.save(profile.name, password)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.app.warn_keyring_failure_once(exc)
 
         terminal = EmbeddedTerminal(self.layout_frame, profile, plink_path, password)
         terminal.close_callback = self.close_console
+        # focus_terminal() already invokes this directly (see its own comment on
+        # why the direct call was added); binding <<TerminalFocused>> to the same
+        # callback here would fire it a second time on every focus event.
         terminal.activate_callback = self.set_active_terminal
-        terminal.bind("<<TerminalFocused>>", lambda _event, t=terminal: self.set_active_terminal(t))
 
         self.panes.append(terminal)
         self.apply_layout()
@@ -2321,7 +2729,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
         if self.active_terminal is not None:
             # If a special 3/4-grid loses panes, fall back to a sensible layout.
-            if len(self.panes) < 3 and self.layout_mode in {"grid3", "grid4"}:
+            if len(self.panes) < 3 and self.layout_mode in {"grid3_top", "grid3_bottom", "grid4"}:
                 self.layout_mode = "horizontal"
 
             self.apply_layout()
@@ -2404,6 +2812,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.title(APP_NAME)
         self.geometry("1440x820")
         self.minsize(1100, 680)
+        self.apply_app_icon()
 
         write_embedded_docs_to_config()
 
@@ -2425,12 +2834,34 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.profile_buttons: list[ctk.CTkButton] = []
         self.command_buttons: list[ctk.CTkButton] = []
 
+        self.monitoring_dashboard: "MonitoringDashboardWindow | None" = None
+        self._keyring_warned = False
+
         self._setup_styles()
         self._build_ui()
         self.refresh_profiles()
         self.refresh_commands()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def apply_app_icon(self) -> None:
+        """Set the window/taskbar icon. Safe no-op if the asset isn't found."""
+        ico_path = find_image_path(ICON_ICO_FILE)
+        if ico_path is not None:
+            try:
+                self.iconbitmap(str(ico_path))
+            except Exception:
+                pass
+
+        png_path = find_image_path(ICON_PNG_FILE)
+        if png_path is not None:
+            try:
+                # Keep a reference on self - PhotoImage is garbage collected
+                # (and the icon silently disappears) if nothing holds onto it.
+                self._icon_image = tk.PhotoImage(file=str(png_path))
+                self.iconphoto(True, self._icon_image)
+            except Exception:
+                pass
 
     def _setup_styles(self) -> None:
         style = ttk.Style(self)
@@ -2480,33 +2911,49 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         )
 
     def _build_ui(self) -> None:
-        self.grid_columnconfigure(1, weight=1)
+        self.sidebar_width = UIState.load_sidebar_width()
+        self._sash_drag_start_x: int | None = None
+        self._sash_drag_start_width: int | None = None
+
+        self.grid_columnconfigure(2, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
         self.topbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0) if ctk is not None else ttk.Frame(self)
-        self.topbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.topbar.grid(row=0, column=0, columnspan=3, sticky="ew")
         self.topbar.grid_columnconfigure(1, weight=1)
 
         self.sidebar = ctk.CTkScrollableFrame(
             self,
             fg_color=PANEL,
             corner_radius=0,
-            width=320,
+            width=self.sidebar_width,
         ) if ctk is not None else ttk.Frame(self)
 
         self.sidebar.grid(row=1, column=0, sticky="nsw")
 
         if ctk is not None:
-            self.sidebar.configure(width=320)
+            self.sidebar.configure(width=self.sidebar_width)
         else:
             self.sidebar.grid_propagate(False)
+
+        if ctk is not None:
+            self.sidebar_sash = ctk.CTkFrame(self, fg_color=CARD_HOVER, corner_radius=0, width=6)
+            self.sidebar_sash.grid(row=1, column=1, sticky="ns")
+            self.sidebar_sash.grid_propagate(False)
+            try:
+                self.sidebar_sash.configure(cursor="sb_h_double_arrow")
+            except Exception:
+                pass
+            self.sidebar_sash.bind("<ButtonPress-1>", self.on_sash_press)
+            self.sidebar_sash.bind("<B1-Motion>", self.on_sash_drag)
+            self.sidebar_sash.bind("<ButtonRelease-1>", self.on_sash_release)
 
         self.main = ctk.CTkFrame(
             self,
             fg_color=BG,
             corner_radius=0,
         ) if ctk is not None else ttk.Frame(self)
-        self.main.grid(row=1, column=1, sticky="nsew")
+        self.main.grid(row=1, column=2, sticky="nsew")
         self.main.grid_columnconfigure(0, weight=1)
         self.main.grid_rowconfigure(1, weight=1)
 
@@ -2516,12 +2963,31 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             corner_radius=0,
             height=32,
         ) if ctk is not None else ttk.Frame(self)
-        self.statusbar.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.statusbar.grid(row=2, column=0, columnspan=3, sticky="ew")
 
         self._build_topbar()
         self._build_sidebar()
         self._build_main()
         self._build_statusbar()
+
+    def on_sash_press(self, event: tk.Event) -> None:
+        self._sash_drag_start_x = event.x_root
+        self._sash_drag_start_width = self.sidebar_width
+
+    def on_sash_drag(self, event: tk.Event) -> None:
+        if self._sash_drag_start_x is None or self._sash_drag_start_width is None:
+            return
+        delta = event.x_root - self._sash_drag_start_x
+        max_width = max(MIN_SIDEBAR_WIDTH, min(MAX_SIDEBAR_WIDTH, int(self.winfo_width() * 0.5)))
+        new_width = max(MIN_SIDEBAR_WIDTH, min(max_width, self._sash_drag_start_width + delta))
+        if new_width != self.sidebar_width:
+            self.sidebar_width = new_width
+            self.sidebar.configure(width=new_width)
+
+    def on_sash_release(self, _event: tk.Event) -> None:
+        self._sash_drag_start_x = None
+        self._sash_drag_start_width = None
+        UIState.save_sidebar_width(self.sidebar_width)
 
     def _build_topbar(self) -> None:
         if ctk is not None:
@@ -2551,16 +3017,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             ttk.Label(self.topbar, text="Embedded SSH Launcher").pack(side="left", padx=10)
 
     def _toolbar_button(self, parent: tk.Widget, text: str, command, color: str):
-        return ctk.CTkButton(
-            parent,
-            text=text,
-            command=command,
-            width=92,
-            height=34,
-            fg_color=color,
-            hover_color=CARD_HOVER if color == CARD else color,
-            corner_radius=10,
-        )
+        return build_button(parent, text, command, color, width=92)
 
     def _build_sidebar(self) -> None:
         self._sidebar_title("Profiles")
@@ -2596,35 +3053,15 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
             row.pack(fill="x", padx=12, pady=(8, 12))
 
-            ctk.CTkButton(
-                row,
-                text="Save",
-                command=self.save_profile,
-                fg_color=SUCCESS,
-                hover_color="#15803d",
-                height=34,
-                corner_radius=10,
-            ).pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-            ctk.CTkButton(
-                row,
-                text="New",
-                command=self.clear_form,
-                fg_color=CARD_HOVER,
-                hover_color="#475569",
-                height=34,
-                corner_radius=10,
-            ).pack(side="left", fill="x", expand=True, padx=4)
-
-            ctk.CTkButton(
-                row,
-                text="Delete",
-                command=self.delete_profile,
-                fg_color=DANGER,
-                hover_color="#991b1b",
-                height=34,
-                corner_radius=10,
-            ).pack(side="left", fill="x", expand=True, padx=(4, 0))
+            build_button(row, "Save", self.save_profile, SUCCESS).pack(
+                side="left", fill="x", expand=True, padx=(0, 4)
+            )
+            build_button(row, "New", self.clear_form, CARD_HOVER).pack(
+                side="left", fill="x", expand=True, padx=4
+            )
+            build_button(row, "Delete", self.delete_profile, DANGER).pack(
+                side="left", fill="x", expand=True, padx=(4, 0)
+            )
         else:
             ttk.Button(self.profile_form, text="Save", command=self.save_profile).pack(fill="x")
             ttk.Button(self.profile_form, text="New", command=self.clear_form).pack(fill="x")
@@ -2812,16 +3249,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
     def _side_button(self, parent: tk.Widget, text: str, command, color: str) -> None:
         if ctk is not None:
-            ctk.CTkButton(
-                parent,
-                text=text,
-                command=command,
-                fg_color=color,
-                hover_color=CARD_HOVER if color in {CARD, CARD_HOVER} else color,
-                height=34,
-                corner_radius=10,
-                anchor="w",
-            ).pack(fill="x", padx=10, pady=4)
+            build_button(parent, text, command, color, anchor="w").pack(fill="x", padx=10, pady=4)
         else:
             ttk.Button(parent, text=text, command=command).pack(fill="x")
 
@@ -2926,7 +3354,11 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         for idx, button in enumerate(self.profile_buttons):
             if ctk is not None:
-                button.configure(fg_color=ACCENT if idx == index else CARD)
+                selected = idx == index
+                button.configure(
+                    fg_color=ACCENT if selected else CARD,
+                    hover_color=ACCENT_HOVER if selected else CARD_HOVER,
+                )
 
         self.status_var.set(f"Selected profile: {profile.name}")
 
@@ -2980,24 +3412,44 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
     def selected_profile(self) -> SSHProfile | None:
         if self.selected_profile_index is None:
-            messagebox.showerror(APP_NAME, "Select a saved profile first.")
+            show_message(self, "error", APP_NAME, "Select a saved profile first.")
             return None
 
         if self.selected_profile_index < 0 or self.selected_profile_index >= len(self.profiles):
-            messagebox.showerror(APP_NAME, "Selected profile is invalid.")
+            show_message(self, "error", APP_NAME, "Selected profile is invalid.")
             return None
 
         return self.profiles[self.selected_profile_index]
 
     def selected_command(self) -> QuickCommand | None:
         if self.selected_command_index is None:
-            messagebox.showerror(APP_NAME, "Right-click or select a command first.")
+            show_message(self, "error", APP_NAME, "Right-click or select a command first.")
             return None
 
         if self.selected_command_index < 0 or self.selected_command_index >= len(self.commands):
             return None
 
         return self.commands[self.selected_command_index]
+
+    def refresh_open_panes_for_profile(self, profile: SSHProfile) -> None:
+        """Update already-open terminal headers after profile is edited in place."""
+        for tab_id in self.notebook.tabs():
+            tab = self.nametowidget(tab_id)
+            for pane in tab.panes:
+                if pane.profile is profile:
+                    pane.refresh_header_label()
+
+    def warn_keyring_failure_once(self, exc: Exception) -> None:
+        """Warn about a keyring/password-save failure at most once per app session.
+
+        Without this, a persistently failing keyring backend would otherwise
+        re-prompt via a blocking modal on every monitoring auto-refresh tick.
+        """
+        if getattr(self, "_keyring_warned", False):
+            print(f"[keyring] password save failed (already warned once): {exc}")
+            return
+        self._keyring_warned = True
+        show_message(self, "warning", APP_NAME, f"Could not save password securely.\n\n{exc}")
 
     def save_profile(self) -> None:
         name = self.name_var.get().strip()
@@ -3006,7 +3458,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         password = self.password_var.get()
 
         if not name or not host or not user:
-            messagebox.showerror(APP_NAME, "Name, Host/IP, and User are required.")
+            show_message(self, "error", APP_NAME, "Name, Host/IP, and User are required.")
             return
 
         try:
@@ -3015,18 +3467,39 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             if not (1 <= port <= 65535):
                 raise ValueError
         except ValueError:
-            messagebox.showerror(APP_NAME, "Port must be a number from 1 to 65535.")
+            show_message(self, "error", APP_NAME, "Port must be a number from 1 to 65535.")
+            return
+
+        duplicate = any(
+            i != self.selected_profile_index and existing.name.strip().lower() == name.lower()
+            for i, existing in enumerate(self.profiles)
+        )
+        if duplicate:
+            show_message(
+                self,
+                "error",
+                APP_NAME,
+                f"A profile named '{name}' already exists. Choose a unique name.\n\n"
+                "(Profile names are used as the credential-store key, so duplicate "
+                "names would share the same saved password.)",
+            )
             return
 
         old_name = None
-        profile = SSHProfile(name=name, host=host, user=user, port=port)
 
         if self.selected_profile_index is None:
+            profile = SSHProfile(name=name, host=host, user=user, port=port)
             self.profiles.append(profile)
             self.selected_profile_index = len(self.profiles) - 1
         else:
-            old_name = self.profiles[self.selected_profile_index].name
-            self.profiles[self.selected_profile_index] = profile
+            # Mutate the existing SSHProfile object in place (instead of replacing
+            # the list entry) so already-open EmbeddedTerminal panes - which hold a
+            # reference to this same object - can be refreshed to show the new
+            # name/host/port instead of going stale.
+            profile = self.profiles[self.selected_profile_index]
+            old_name = profile.name
+            profile.name, profile.host, profile.user, profile.port = name, host, user, port
+            self.refresh_open_panes_for_profile(profile)
 
         if old_name and old_name != name:
             PasswordStore.delete(old_name)
@@ -3035,10 +3508,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             try:
                 PasswordStore.save(name, password)
             except Exception as exc:
-                messagebox.showwarning(
-                    APP_NAME,
-                    f"Profile saved, but password was not saved securely.\n\n{exc}",
-                )
+                self.warn_keyring_failure_once(exc)
 
         ProfileStore.save(self.profiles)
         self.refresh_profiles()
@@ -3062,12 +3532,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
     def delete_profile(self) -> None:
         if self.selected_profile_index is None:
-            messagebox.showerror(APP_NAME, "Select a profile first.")
+            show_message(self, "error", APP_NAME, "Select a profile first.")
             return
 
         profile = self.profiles[self.selected_profile_index]
 
-        if not messagebox.askyesno(APP_NAME, f"Delete profile '{profile.name}'?"):
+        if not show_message(self, "confirm", APP_NAME, f"Delete profile '{profile.name}'?"):
             return
 
         PasswordStore.delete(profile.name)
@@ -3156,7 +3626,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         if selected is None:
             return
 
-        if not messagebox.askyesno(APP_NAME, f"Delete command '{selected.name}'?"):
+        if not show_message(self, "confirm", APP_NAME, f"Delete command '{selected.name}'?"):
             return
 
         del self.commands[self.selected_command_index]
@@ -3221,11 +3691,11 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         terminal = self.get_target_terminal()
 
         if terminal is None:
-            messagebox.showerror(APP_NAME, "No active console found.")
+            show_message(self, "error", APP_NAME, "No active console found.")
             return
 
         if not terminal.alive:
-            messagebox.showwarning(APP_NAME, "The selected console is disconnected. Use Reconnect first.")
+            show_message(self, "warning", APP_NAME, "The selected console is disconnected. Use Reconnect first.")
             return
 
         terminal.run_command(command)
@@ -3234,7 +3704,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         terminal = self.get_target_terminal()
 
         if terminal is None:
-            messagebox.showerror(APP_NAME, "No active console found.")
+            show_message(self, "error", APP_NAME, "No active console found.")
             return
 
         if terminal.alive:
@@ -3335,7 +3805,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         tab = self.current_tab()
 
         if tab is None:
-            messagebox.showerror(APP_NAME, "No tab selected.")
+            show_message(self, "error", APP_NAME, "No tab selected.")
             return
 
         tab.set_layout_mode(layout_mode)
@@ -3356,7 +3826,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         selected = self.notebook.select()
 
         if not selected:
-            messagebox.showerror(APP_NAME, "No tab selected.")
+            show_message(self, "error", APP_NAME, "No tab selected.")
             return
 
         current_name = self.tab_title_without_close(selected)
@@ -3383,7 +3853,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         terminal = self.get_target_terminal()
 
         if terminal is None:
-            messagebox.showerror(APP_NAME, "No active console found.")
+            show_message(self, "error", APP_NAME, "No active console found.")
             return
 
         terminal.reconnect()
@@ -3393,12 +3863,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         terminal = self.get_target_terminal()
 
         if terminal is None:
-            messagebox.showerror(APP_NAME, "No active console found.")
+            show_message(self, "error", APP_NAME, "No active console found.")
             return
 
         tab = self.tab_for_terminal(terminal)
         if tab is None:
-            messagebox.showerror(APP_NAME, "Could not find the selected console tab.")
+            show_message(self, "error", APP_NAME, "Could not find the selected console tab.")
             return
 
         tab.close_console(terminal)
@@ -3491,6 +3961,15 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 tab.set_active_terminal(tab.panes[-1])
 
     def on_notebook_double_click(self, event: tk.Event) -> None:
+        # A double-click on/near the x close zone must never trigger a rename.
+        # Without this guard, the first click's deferred close (see
+        # on_notebook_button_release) can close a tab 1ms later, shifting
+        # later tabs left, and the second click of the same double-click then
+        # resolves against whatever tab slid into that position - opening the
+        # rename dialog on the wrong tab.
+        if self.get_tab_close_candidate(event) is not None:
+            return
+
         try:
             clicked_tab = self.notebook.index(f"@{event.x},{event.y}")
         except Exception:
@@ -3600,11 +4079,16 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
 
     def open_monitoring_dashboard(self) -> None:
+        if self.monitoring_dashboard is not None and self.monitoring_dashboard.winfo_exists():
+            self.monitoring_dashboard.lift()
+            self.monitoring_dashboard.focus()
+            return
         try:
-            MonitoringDashboardWindow(self)
+            self.monitoring_dashboard = MonitoringDashboardWindow(self)
             self.status_var.set("Opened web host monitoring dashboard")
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Could not open monitoring dashboard.\n\n{exc}")
+            self.monitoring_dashboard = None
+            show_message(self, "error", APP_NAME, f"Could not open monitoring dashboard.\n\n{exc}")
 
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:
@@ -3630,8 +4114,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 return
             try:
                 PasswordStore.save(profile.name, password)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.warn_keyring_failure_once(exc)
 
         args = [
             plink_path,
@@ -3696,14 +4180,14 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             MarkdownDocumentWindow(self, initial_file=initial_file)
             self.status_var.set("Opened documentation viewer")
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Could not open documentation viewer.\n\n{exc}")
+            show_message(self, "error", APP_NAME, f"Could not open documentation viewer.\n\n{exc}")
 
     def open_docs_folder(self) -> None:
         write_embedded_docs_to_config()
         try:
             os.startfile(CONFIG_DIR)  # type: ignore[attr-defined]
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Could not open documentation folder.\n\n{exc}")
+            show_message(self, "error", APP_NAME, f"Could not open documentation folder.\n\n{exc}")
 
     def find_plink(self) -> str | None:
         if getattr(sys, "frozen", False):
@@ -3725,7 +4209,9 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         pyte_status = "Found" if pyte is not None else "Missing"
         plink_status = "Found" if self.find_plink() else "Missing"
 
-        messagebox.showinfo(
+        show_message(
+            self,
+            "info",
             APP_NAME,
             "Requirements:\n\n"
             f"customtkinter: {customtkinter_status}\n"
