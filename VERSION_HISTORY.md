@@ -440,10 +440,23 @@ Cover the two most common "I have to drop to a separate tool for this" gaps: mov
 
 ---
 
+## v1.5.3 - Monitoring: History & Multi-Server View
+
+### Added
+
+- **Local Metrics History & Sparklines**: each health-check run's load/RAM%/disk%/connections are saved locally per profile (last 30 samples, `%APPDATA%\EmbeddedSSHLauncher\monitoring_history.json`) and rendered as small trend sparklines on the corresponding dashboard cards, instead of showing only the latest value.
+- **Multi-Server View**: a new "Monitor All Profiles" window runs the health check against every saved profile at once (concurrently, not queued) and shows one compact status card per server (OK/Warning/Critical, worst-of load/RAM/disk/connections). Clicking a card opens the full detail dashboard for that profile. The grid reflows its column count on resize, same as the main dashboard.
+
+### Purpose
+
+Turn the Monitoring Dashboard from a point-in-time snapshot into something worth keeping open: see trends over time on one server, or the health of the whole fleet at a glance.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.2
+v1.5.3
 ```
 
 ---

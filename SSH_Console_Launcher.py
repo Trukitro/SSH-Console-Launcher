@@ -81,7 +81,7 @@ except Exception:
     pyte = None
 
 
-APP_NAME = "SSH Console Launcher v1.5.2"
+APP_NAME = "Embedded SSH Launcher v1.5.2"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"
@@ -90,6 +90,8 @@ UI_STATE_FILE = CONFIG_DIR / "ui_state.json"
 RECENT_FILE = CONFIG_DIR / "recent.json"
 MAX_RECENT = 8
 SESSION_FILE = CONFIG_DIR / "session.json"
+MONITORING_HISTORY_FILE = CONFIG_DIR / "monitoring_history.json"
+MAX_HISTORY_SAMPLES = 30
 DEFAULT_SIDEBAR_WIDTH = 320
 MIN_SIDEBAR_WIDTH = 240
 MAX_SIDEBAR_WIDTH = 560
@@ -770,6 +772,45 @@ class SessionStore:
             SESSION_FILE.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+class MetricsHistoryStore:
+    """Small local history of monitoring samples per profile, for sparklines."""
+
+    @staticmethod
+    def _load_all() -> dict[str, list[dict]]:
+        if not MONITORING_HISTORY_FILE.exists():
+            return {}
+        try:
+            raw = json.loads(MONITORING_HISTORY_FILE.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def load(profile_name: str) -> list[dict]:
+        return MetricsHistoryStore._load_all().get(profile_name, [])
+
+    @staticmethod
+    def record(profile_name: str, load: float, ram_pct: float, disk_pct: float, connections: int) -> list[dict]:
+        data = MetricsHistoryStore._load_all()
+        samples = data.get(profile_name, [])
+        samples.append({
+            "ts": time.time(),
+            "load": load,
+            "ram_pct": ram_pct,
+            "disk_pct": disk_pct,
+            "connections": connections,
+        })
+        samples = samples[-MAX_HISTORY_SAMPLES:]
+        data[profile_name] = samples
+
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            MONITORING_HISTORY_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return samples
 
 
 class PasswordStore:
@@ -1453,6 +1494,8 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             ("uwsgi_top", "Web2py/uWSGI CPU", "Waiting...", MUTED),
         ]
 
+        sparkline_keys = ("load", "ram", "disk", "connections")
+
         for idx, (key, title, value, color) in enumerate(card_specs):
             card = ctk.CTkFrame(self.cards_frame, fg_color=CARD, corner_radius=16)
             card.grid(row=idx // self._current_columns, column=idx % self._current_columns, sticky="nsew", padx=8, pady=8)
@@ -1465,9 +1508,16 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             value_label.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 8))
 
             detail_label = ctk.CTkLabel(card, text="", text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=235, justify="left")
-            detail_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 14))
 
             self.card_labels[key] = {"frame": card, "value": value_label, "detail": detail_label}
+
+            if key in sparkline_keys:
+                detail_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 4))
+                sparkline = tk.Canvas(card, width=90, height=24, bg=CARD, highlightthickness=0, bd=0)
+                sparkline.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 12))
+                self.card_labels[key]["sparkline"] = sparkline
+            else:
+                detail_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 14))
 
         self.raw_output = tk.Text(
             body,
@@ -1641,8 +1691,76 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         metrics = self.parse_health_output(output)
         self.last_metrics = metrics
         self.update_cards(metrics)
+        self.record_metrics_history(metrics)
         self.update_raw_output(output)
         self.set_status("Last refresh completed", SUCCESS)
+
+    def record_metrics_history(self, metrics: dict[str, str]) -> None:
+        if not self.profile:
+            return
+
+        cores = max(1, self.as_int(metrics, "CPUCORES", 1))
+        loadavg = metrics.get("LOADAVG", "")
+        try:
+            load1 = float(loadavg.split()[0])
+        except Exception:
+            load1 = 0.0
+
+        mem = metrics.get("MEM", "")
+        try:
+            total, used = [float(x) for x in mem.split(",")[:2]]
+            ram_pct = (used / total) * 100 if total else 0.0
+        except Exception:
+            ram_pct = 0.0
+
+        disk = metrics.get("DISK_ROOT", "")
+        try:
+            disk_pct = float(disk.split(",")[3].replace("%", ""))
+        except Exception:
+            disk_pct = 0.0
+
+        connections = self.as_int(metrics, "WEB_ESTABLISHED")
+
+        samples = MetricsHistoryStore.record(self.profile.name, load1 / cores * 100, ram_pct, disk_pct, connections)
+
+        series = {
+            "load": [s.get("load", 0.0) for s in samples],
+            "ram": [s.get("ram_pct", 0.0) for s in samples],
+            "disk": [s.get("disk_pct", 0.0) for s in samples],
+            "connections": [s.get("connections", 0) for s in samples],
+        }
+        for key, values in series.items():
+            self.draw_sparkline(key, values)
+
+    def draw_sparkline(self, key: str, values: list[float]) -> None:
+        labels = self.card_labels.get(key)
+        if not labels or "sparkline" not in labels:
+            return
+        canvas: tk.Canvas = labels["sparkline"]
+        try:
+            if not canvas.winfo_exists():
+                return
+        except Exception:
+            return
+
+        canvas.delete("all")
+        if len(values) < 2:
+            return
+
+        width = int(canvas["width"])
+        height = int(canvas["height"])
+        pad = 2
+        lo, hi = min(values), max(values)
+        span = (hi - lo) or 1.0
+
+        points: list[float] = []
+        step = (width - 2 * pad) / (len(values) - 1)
+        for i, v in enumerate(values):
+            x = pad + i * step
+            y = height - pad - ((v - lo) / span) * (height - 2 * pad)
+            points.extend([x, y])
+
+        canvas.create_line(*points, fill=ACCENT, width=2, smooth=True)
 
     def update_raw_output(self, output: str) -> None:
         if not self.winfo_exists():
@@ -1894,6 +2012,229 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             return "No data"
         parts = [p.strip() for p in raw.split(";") if p.strip()]
         return "\n".join(parts[:8])
+
+
+def summarize_health(metrics: dict[str, str]) -> tuple[str, str]:
+    """Lightweight worst-of-4 status (load/RAM/disk/connections) for the multi-server grid.
+
+    Deliberately not a reuse of MonitoringDashboardWindow.update_cards()'s full
+    gateway/nginx/uWSGI risk scoring - this is a compact per-server summary line,
+    not the detailed dashboard.
+    """
+    order = {"ok": 0, "warning": 1, "critical": 2}
+    overall = "ok"
+    parts: list[str] = []
+
+    def bump(level: str) -> None:
+        nonlocal overall
+        if order[level] > order[overall]:
+            overall = level
+
+    try:
+        cores = max(1, int(float(metrics.get("CPUCORES", "1") or 1)))
+        load1 = float(metrics.get("LOADAVG", "0").split()[0])
+        ratio = load1 / cores
+        level = "critical" if ratio >= 2.0 else "warning" if ratio >= 1.0 else "ok"
+        bump(level)
+        parts.append(f"Load {load1:.2f}/{cores}")
+    except Exception:
+        parts.append("Load ?")
+
+    try:
+        total, used = [float(x) for x in metrics.get("MEM", "").split(",")[:2]]
+        ram_pct = (used / total) * 100 if total else 0.0
+        level = "critical" if ram_pct >= 92 else "warning" if ram_pct >= 80 else "ok"
+        bump(level)
+        parts.append(f"RAM {ram_pct:.0f}%")
+    except Exception:
+        parts.append("RAM ?")
+
+    try:
+        disk_pct = float(metrics.get("DISK_ROOT", "").split(",")[3].replace("%", ""))
+        level = "critical" if disk_pct >= 95 else "warning" if disk_pct >= 85 else "ok"
+        bump(level)
+        parts.append(f"Disk {disk_pct:.0f}%")
+    except Exception:
+        parts.append("Disk ?")
+
+    try:
+        web_est = int(float(metrics.get("WEB_ESTABLISHED", "0") or 0))
+        level = "critical" if web_est >= 500 else "warning" if web_est >= 200 else "ok"
+        bump(level)
+        parts.append(f"Conns {web_est}")
+    except Exception:
+        parts.append("Conns ?")
+
+    return overall, " | ".join(parts)
+
+
+class MultiServerMonitorWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
+    """Runs the health check against every saved profile at once, one compact card per server."""
+
+    def __init__(self, app: "EmbeddedSSHLauncher"):
+        super().__init__(app)
+        self.app = app
+        self.title("Monitor All Profiles")
+        self.geometry("1180x760")
+        self.minsize(720, 480)
+        self.transient(app)
+
+        if ctk is not None:
+            self.configure(fg_color=BG)
+
+        self.card_labels: dict[str, dict[str, object]] = {}
+        self._current_columns = 3
+        self._regrid_after_id: str | None = None
+
+        self._build_ui()
+        self.refresh_all()
+
+    def _build_ui(self) -> None:
+        if ctk is None:
+            self.text = tk.Text(self)
+            self.text.pack(fill="both", expand=True)
+            self.text.insert("1.0", "Multi-server monitor requires customtkinter for the full UI.\n")
+            return
+
+        root = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        root.pack(fill="both", expand=True)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=0)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Monitor All Profiles",
+            text_color=TEXT,
+            font=ctk.CTkFont(size=20, weight="bold"),
+        ).grid(row=0, column=0, padx=18, pady=(14, 4), sticky="w")
+
+        self.status_label = ctk.CTkLabel(header, text="Ready", text_color=MUTED, font=ctk.CTkFont(size=12))
+        self.status_label.grid(row=1, column=0, padx=18, pady=(0, 14), sticky="w")
+
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=0, column=1, rowspan=2, padx=18, pady=12, sticky="e")
+        build_button(actions, "Refresh All", self.refresh_all, ACCENT, width=100).pack(side="left", padx=4)
+        build_button(actions, "Close", self.destroy, DANGER, width=80).pack(side="left", padx=4)
+
+        body = ctk.CTkScrollableFrame(root, fg_color=BG)
+        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=14)
+        body.grid_columnconfigure(tuple(range(self._current_columns)), weight=1)
+        self.cards_frame = body
+        body.bind("<Configure>", self.on_body_configure)
+
+        if not self.app.profiles:
+            ctk.CTkLabel(body, text="No saved profiles yet.", text_color=MUTED).grid(row=0, column=0, padx=8, pady=8, sticky="w")
+            return
+
+        for idx, profile in enumerate(self.app.profiles):
+            card = ctk.CTkFrame(self.cards_frame, fg_color=CARD, corner_radius=16, cursor="hand2")
+            card.grid(row=idx // self._current_columns, column=idx % self._current_columns, sticky="nsew", padx=8, pady=8)
+            card.grid_columnconfigure(0, weight=1)
+
+            title_label = ctk.CTkLabel(card, text=profile.name, text_color=TEXT, font=ctk.CTkFont(size=14, weight="bold"))
+            title_label.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 2))
+
+            host_label = ctk.CTkLabel(card, text=f"{profile.user}@{profile.host}:{profile.port}", text_color=MUTED, font=ctk.CTkFont(size=11))
+            host_label.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 6))
+
+            status_value = ctk.CTkLabel(card, text="Waiting...", text_color=MUTED, font=ctk.CTkFont(size=15, weight="bold"))
+            status_value.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 4))
+
+            summary_label = ctk.CTkLabel(card, text="", text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=220, justify="left")
+            summary_label.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 14))
+
+            for widget in (card, title_label, host_label, status_value, summary_label):
+                widget.bind("<Button-1>", lambda _e, i=idx: self.open_detail(i))
+
+            self.card_labels[profile.name] = {"frame": card, "value": status_value, "detail": summary_label}
+
+    def on_body_configure(self, event: tk.Event) -> None:
+        columns = max(1, min(6, event.width // 260))
+        if columns == self._current_columns:
+            return
+        if self._regrid_after_id is not None:
+            try:
+                self.after_cancel(self._regrid_after_id)
+            except Exception:
+                pass
+        self._regrid_after_id = self.after(120, lambda: self.regrid_cards(columns))
+
+    def regrid_cards(self, columns: int) -> None:
+        self._regrid_after_id = None
+        if not self.winfo_exists():
+            return
+
+        old_columns = self._current_columns
+        self._current_columns = columns
+
+        if old_columns > columns:
+            self.cards_frame.grid_columnconfigure(tuple(range(old_columns)), weight=0)
+        self.cards_frame.grid_columnconfigure(tuple(range(columns)), weight=1)
+
+        for idx, labels in enumerate(self.card_labels.values()):
+            labels["frame"].grid_configure(row=idx // columns, column=idx % columns)
+
+    def open_detail(self, index: int) -> None:
+        self.app.select_profile(index)
+        self.app.open_monitoring_dashboard()
+
+    def refresh_all(self) -> None:
+        if not self.winfo_exists() or ctk is None:
+            return
+        if not self.app.profiles:
+            return
+
+        self.status_label.configure(text=f"Checking {len(self.app.profiles)} profile(s)...", text_color=WARNING)
+        for profile in self.app.profiles:
+            labels = self.card_labels.get(profile.name)
+            if labels:
+                labels["value"].configure(text="Loading...", text_color=MUTED)
+                labels["detail"].configure(text="")
+                labels["frame"].configure(fg_color=CARD)
+            self.app.run_remote_monitoring_command(
+                profile,
+                MONITORING_HEALTH_COMMAND,
+                callback=lambda success, output, error, p=profile: self.on_result(p, success, output, error),
+            )
+
+    def on_result(self, profile: SSHProfile, success: bool, output: str, error: str) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        labels = self.card_labels.get(profile.name)
+        if not labels:
+            return
+
+        if not success:
+            labels["value"].configure(text="Failed", text_color=DANGER)
+            labels["detail"].configure(text=(error or "Could not run remote command.")[:200])
+            labels["frame"].configure(fg_color=CARD)
+            self.status_label.configure(text="Last refresh completed with errors", text_color=WARNING)
+            return
+
+        metrics: dict[str, str] = {}
+        for line in output.splitlines():
+            if line.startswith("__") and "__=" in line:
+                key, value = line.split("=", 1)
+                metrics[key.strip("_")] = value.strip()
+
+        status, summary = summarize_health(metrics)
+        status_text = "CRITICAL" if status == "critical" else "WARNING" if status == "warning" else "OK"
+        color = DANGER if status == "critical" else WARNING if status == "warning" else SUCCESS
+        bg = tint(DANGER, -0.72) if status == "critical" else tint(WARNING, -0.72) if status == "warning" else tint(SUCCESS, -0.78)
+
+        labels["value"].configure(text=status_text, text_color=color)
+        labels["detail"].configure(text=summary)
+        labels["frame"].configure(fg_color=bg)
+
+        self.status_label.configure(text="Last refresh completed", text_color=SUCCESS)
 
 
 class FileTransferWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
@@ -3641,6 +3982,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.monitoring_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self._side_button(self.monitoring_panel, "Open Dashboard", self.open_monitoring_dashboard, ACCENT)
+        self._side_button(self.monitoring_panel, "Monitor All Profiles", self.open_multi_server_monitor, ACCENT)
         self._side_button(self.monitoring_panel, "Run Health Check", self.run_health_check_in_terminal, CARD_HOVER)
         self._side_button(self.monitoring_panel, "502 / Gateway Check", self.run_gateway_check, WARNING)
         self._side_button(self.monitoring_panel, "Connections", self.run_connections_check, CARD_HOVER)
@@ -4721,6 +5063,16 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             self.status_var.set("Opened file transfer window")
         except Exception as exc:
             show_message(self, "error", APP_NAME, f"Could not open file transfer window.\n\n{exc}")
+
+    def open_multi_server_monitor(self) -> None:
+        if not self.profiles:
+            show_message(self, "info", APP_NAME, "No saved profiles yet. Add a profile first.")
+            return
+        try:
+            MultiServerMonitorWindow(self)
+            self.status_var.set("Opened multi-server monitor")
+        except Exception as exc:
+            show_message(self, "error", APP_NAME, f"Could not open multi-server monitor.\n\n{exc}")
 
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:

@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.2  
+**Current stable version:** v1.5.3  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -32,6 +32,7 @@ The app currently supports:
 - Recent connections list, per-profile environment tags (prod/staging/dev), SSH config import
 - Jump host / bastion support, session restore on launch
 - File transfer (pscp), per-tab broadcast typing
+- Monitoring history/sparklines, multi-server monitor view
 
 ---
 
@@ -198,16 +199,16 @@ Cover the two most common "I have to drop to a separate tool for this" gaps.
 
 ---
 
-## v1.5.3 - Monitoring: History & Multi-Server View
+## v1.5.3 - Monitoring: History & Multi-Server View ✅ Implemented
 
 ### Goal
 
 Turn the Monitoring Dashboard from a point-in-time snapshot into something you'd actually keep open.
 
-### Planned Features
+### Implemented
 
-- **Local metrics history**: persist each health-check run's key numbers (load, RAM%, disk%, connections) to a small local store and render sparklines on the relevant cards instead of just the latest value.
-- **Multi-server grid**: a mode that runs the health check against several saved profiles at once and shows one compact card per server, instead of only the currently-focused profile.
+- **Local metrics history**: each health-check run's key numbers (load, RAM%, disk%, connections) are persisted per profile to a small local store (last 30 samples) and rendered as sparklines on the load/RAM/disk/connections cards instead of just the latest value.
+- **Multi-server grid**: a new "Monitor All Profiles" window runs the health check against every saved profile at once (concurrently) and shows one compact status card per server. Clicking a card opens the detailed dashboard for that profile.
 
 ---
 
@@ -277,13 +278,12 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0, v1.5.1, v1.5.2 implemented):
+Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3 implemented):
 
-1. v1.5.3 - Monitoring: History & Multi-Server View
-2. v1.5.4 - Monitoring: Alerts & Generalization
-3. v1.5.5 - Security Hardening
-4. v1.6.1 - Distribution & Release Automation
-5. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.4 - Monitoring: Alerts & Generalization
+2. v1.5.5 - Security Hardening
+3. v1.6.1 - Distribution & Release Automation
+4. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 
