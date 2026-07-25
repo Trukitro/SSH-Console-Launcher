@@ -80,6 +80,11 @@ try:
 except Exception:
     pyte = None
 
+try:
+    import winsound
+except Exception:
+    winsound = None
+
 
 APP_NAME = "Embedded SSH Launcher v1.5.2"
 SERVICE_NAME = "EmbeddedSSHLauncher"
@@ -358,6 +363,21 @@ except Exception as exc:
 PY_UWSGI_STATS
 """
 
+
+def resolve_health_command(profile: "SSHProfile | None") -> str:
+    """A profile's custom health-check command, or the built-in Web2py/uWSGI/Nginx one.
+
+    A custom command only needs to emit the same `__KEY__=value` lines the
+    dashboard already parses (see parse_health_output/update_cards) to
+    populate the cards - anything else still shows up in the raw output
+    panel, so the dashboard stays useful for stacks (Docker, Kubernetes,
+    etc.) that don't emit any of those keys at all.
+    """
+    if profile is not None and profile.health_check_command.strip():
+        return profile.health_check_command
+    return MONITORING_HEALTH_COMMAND
+
+
 CONNECTED = "#22c55e"
 DISCONNECTED = "#ef4444"
 CONNECTING = "#f59e0b"
@@ -609,6 +629,7 @@ class SSHProfile:
     port: int = 22
     env_color: str = ""  # "" / "prod" / "staging" / "dev" - see ENV_TAGS
     jump_profile_name: str = ""  # "" = direct connection; otherwise another profile's .name
+    health_check_command: str = ""  # "" = use the built-in MONITORING_HEALTH_COMMAND
 
 
 @dataclass
@@ -860,6 +881,41 @@ def center_toplevel(dialog: tk.Widget, parent: tk.Widget, width: int, height: in
         dialog.geometry(f"{width}x{height}+{x}+{y}")
     except Exception:
         dialog.geometry(f"{width}x{height}")
+
+
+def show_toast(root: tk.Widget, title: str, message: str, duration_ms: int = 7000) -> None:
+    """Small self-dismissing, always-on-top popup in the bottom-right corner.
+
+    A real Windows Action Center toast needs a new third-party dependency
+    (win10toast/winrt) or shelling out to PowerShell with the message text
+    interpolated into a command line - a plain Tk popup avoids both and is
+    good enough for "the dashboard isn't focused" style alerts.
+    """
+    try:
+        toast = ctk.CTkToplevel(root) if ctk is not None else tk.Toplevel(root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        if ctk is not None:
+            toast.configure(fg_color=PANEL)
+
+        width, height = 320, 96
+        screen_w = toast.winfo_screenwidth()
+        screen_h = toast.winfo_screenheight()
+        x = screen_w - width - 24
+        y = screen_h - height - 64
+        toast.geometry(f"{width}x{height}+{x}+{y}")
+
+        if ctk is not None:
+            frame = ctk.CTkFrame(toast, fg_color=PANEL, corner_radius=10, border_width=1, border_color=DANGER)
+            frame.pack(fill="both", expand=True)
+            ctk.CTkLabel(frame, text=title, text_color=DANGER, font=ctk.CTkFont(size=13, weight="bold"), wraplength=290, justify="left").pack(anchor="w", padx=14, pady=(12, 2))
+            ctk.CTkLabel(frame, text=message, text_color=TEXT, font=ctk.CTkFont(size=11), wraplength=290, justify="left").pack(anchor="w", padx=14, pady=(0, 12))
+        else:
+            tk.Label(toast, text=f"{title}\n{message}", justify="left").pack(fill="both", expand=True)
+
+        toast.after(duration_ms, lambda: toast.destroy() if toast.winfo_exists() else None)
+    except Exception:
+        pass
 
 
 def ask_text(
@@ -1402,6 +1458,8 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.refresh_seconds = tk.IntVar(value=15)
         self.auto_refresh_after_id: str | None = None
         self.last_metrics: dict[str, str] = {}
+        self.notify_enabled = tk.BooleanVar(value=True)
+        self.last_overall_status = "ok"
 
         self.card_labels: dict[str, dict[str, object]] = {}
 
@@ -1454,7 +1512,7 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
 
         auto = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=14)
         auto.grid(row=1, column=0, sticky="ew", padx=14, pady=(12, 8))
-        auto.grid_columnconfigure(5, weight=1)
+        auto.grid_columnconfigure(6, weight=1)
 
         ctk.CTkSwitch(auto, text="Auto refresh", variable=self.auto_refresh_enabled, command=self.toggle_auto_refresh, text_color=TEXT).grid(row=0, column=0, padx=12, pady=10, sticky="w")
         ctk.CTkLabel(auto, text="Interval", text_color=MUTED).grid(row=0, column=1, padx=(12, 4), pady=10)
@@ -1463,8 +1521,10 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.interval_menu.grid(row=0, column=2, padx=4, pady=10)
         ctk.CTkLabel(auto, text="seconds", text_color=MUTED).grid(row=0, column=3, padx=(4, 12), pady=10)
 
+        ctk.CTkSwitch(auto, text="Notify on Critical", variable=self.notify_enabled, text_color=TEXT).grid(row=0, column=4, padx=12, pady=10, sticky="w")
+
         self.status_label = ctk.CTkLabel(auto, text="Ready", text_color=MUTED)
-        self.status_label.grid(row=0, column=4, padx=12, pady=10, sticky="w")
+        self.status_label.grid(row=0, column=5, padx=12, pady=10, sticky="w")
 
         body = ctk.CTkScrollableFrame(root, fg_color=BG)
         body.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
@@ -1633,7 +1693,7 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.destroy()
 
     def run_health_command_in_terminal(self) -> None:
-        self.app.run_command_on_focused_console(MONITORING_HEALTH_COMMAND)
+        self.app.run_command_on_focused_console(resolve_health_command(self.profile))
         self.app.status_var.set("Sent advanced health-check command to focused terminal")
 
     def run_gateway_check_in_terminal(self) -> None:
@@ -1656,7 +1716,7 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         self.set_status("Running advanced health check...", WARNING)
         self.set_cards_loading()
 
-        self.app.run_remote_monitoring_command(self.profile, MONITORING_HEALTH_COMMAND, callback=self.on_monitoring_result)
+        self.app.run_remote_monitoring_command(self.profile, resolve_health_command(self.profile), callback=self.on_monitoring_result)
 
     def set_status(self, text: str, color: str = MUTED) -> None:
         if not self.winfo_exists():
@@ -1996,6 +2056,21 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
         overall_color = DANGER if overall == "critical" else WARNING if overall == "warning" else SUCCESS
         self.set_card("overall", overall_text, "\n".join(reasons[:6]), overall_color, overall)
 
+        if overall == "critical" and self.last_overall_status != "critical":
+            self.notify_critical(reasons)
+        self.last_overall_status = overall
+
+    def notify_critical(self, reasons: list[str]) -> None:
+        if not self.notify_enabled.get():
+            return
+        if winsound is not None:
+            try:
+                winsound.MessageBeep(winsound.MB_ICONHAND)
+            except Exception:
+                pass
+        name = self.profile.name if self.profile else "Server"
+        show_toast(self.app, f"{name}: CRITICAL", "\n".join(reasons[:3]))
+
     def update_disk_card(self, metrics: dict[str, str], metric_key: str, card_key: str, label: str) -> None:
         disk = metrics.get(metric_key, "")
         try:
@@ -2197,7 +2272,7 @@ class MultiServerMonitorWindow(ctk.CTkToplevel if ctk is not None else tk.Toplev
                 labels["frame"].configure(fg_color=CARD)
             self.app.run_remote_monitoring_command(
                 profile,
-                MONITORING_HEALTH_COMMAND,
+                resolve_health_command(profile),
                 callback=lambda success, output, error, p=profile: self.on_result(p, success, output, error),
             )
 
@@ -3854,6 +3929,30 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             self.jump_host_menu.pack(fill="x", padx=12, pady=(0, 2))
 
         if ctk is not None:
+            ctk.CTkLabel(
+                self.profile_form,
+                text="Custom Health Check Command (optional)",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+
+            ctk.CTkLabel(
+                self.profile_form,
+                text="Leave blank to use the built-in Web2py/uWSGI/Nginx check. To populate\n"
+                     "the dashboard cards, echo the same __KEY__=value lines (see docs);\n"
+                     "otherwise the output still shows in the dashboard's raw output panel.",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=10),
+                justify="left",
+            ).pack(anchor="w", padx=12, pady=(0, 4))
+
+            self.health_check_textbox = ctk.CTkTextbox(self.profile_form, height=70, fg_color=PANEL, wrap="none")
+            self.health_check_textbox.pack(fill="x", padx=12, pady=(0, 2))
+        else:
+            self.health_check_textbox = tk.Text(self.profile_form, height=4)
+            self.health_check_textbox.pack(fill="x")
+
+        if ctk is not None:
             row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
             row.pack(fill="x", padx=12, pady=(8, 12))
 
@@ -4231,6 +4330,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.set_env_color_selection(profile.env_color)
         self.refresh_jump_host_options(exclude_name=profile.name)
         self.jump_host_var.set(profile.jump_profile_name or "None")
+        self.health_check_textbox.delete("1.0", "end")
+        self.health_check_textbox.insert("1.0", profile.health_check_command)
 
         for idx, button in enumerate(self.profile_buttons):
             if ctk is not None:
@@ -4393,11 +4494,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         env_color = self.env_color_var.get()
         if env_color not in ENV_TAGS:
             env_color = ""
+        health_check_command = self.health_check_textbox.get("1.0", "end").rstrip("\n")
 
         if self.selected_profile_index is None:
             profile = SSHProfile(
                 name=name, host=host, user=user, port=port,
                 env_color=env_color, jump_profile_name=jump_profile_name,
+                health_check_command=health_check_command,
             )
             self.profiles.append(profile)
             self.selected_profile_index = len(self.profiles) - 1
@@ -4411,6 +4514,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             profile.name, profile.host, profile.user, profile.port = name, host, user, port
             profile.env_color = env_color
             profile.jump_profile_name = jump_profile_name
+            profile.health_check_command = health_check_command
             self.refresh_open_panes_for_profile(profile)
 
         if old_name and old_name != name:
@@ -4440,6 +4544,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.set_env_color_selection("")
         self.refresh_jump_host_options()
         self.jump_host_var.set("None")
+        self.health_check_textbox.delete("1.0", "end")
 
         for button in self.profile_buttons:
             if ctk is not None:
@@ -5131,7 +5236,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def run_health_check_in_terminal(self) -> None:
-        self.run_command_on_focused_console(MONITORING_HEALTH_COMMAND)
+        self.run_command_on_focused_console(resolve_health_command(self.get_monitoring_profile()))
         self.status_var.set("Sent advanced health-check command to focused terminal")
 
     def run_gateway_check(self) -> None:

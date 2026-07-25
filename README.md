@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.3  
+**Current version:** 1.5.4  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -439,10 +439,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.3
+v1.5.4
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, and v1.5.3's Monitoring History/Sparklines and Multi-Server View. See `VERSION_HISTORY.md` for details.
+This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, and v1.5.4's Critical Alerts and Generalized Health Check. See `VERSION_HISTORY.md` for details.
 
 ---
 

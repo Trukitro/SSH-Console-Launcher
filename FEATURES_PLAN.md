@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.3  
+**Current stable version:** v1.5.4  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -33,6 +33,7 @@ The app currently supports:
 - Jump host / bastion support, session restore on launch
 - File transfer (pscp), per-tab broadcast typing
 - Monitoring history/sparklines, multi-server monitor view
+- Critical alerts (popup + beep), per-profile custom health-check command
 
 ---
 
@@ -212,16 +213,16 @@ Turn the Monitoring Dashboard from a point-in-time snapshot into something you'd
 
 ---
 
-## v1.5.4 - Monitoring: Alerts & Generalization
+## v1.5.4 - Monitoring: Alerts & Generalization ✅ Implemented
 
 ### Goal
 
 Make the dashboard proactive instead of something you have to remember to check, and usable beyond the Web2py/uWSGI/Nginx stack it was built for.
 
-### Planned Features
+### Implemented
 
-- **Desktop/sound notification on critical**: fire a Windows toast notification (and/or a sound) when the Overall Web Host Risk (or any card) crosses into critical, even if the dashboard window isn't focused.
-- **Generalized health-check**: let a profile specify its own health-check script/command instead of the hardcoded Web2py/uWSGI/Nginx `MONITORING_HEALTH_COMMAND`, so the dashboard is useful for Docker, Kubernetes, or any other stack. Keep the current script as the default for backward compatibility.
+- **Desktop/sound notification on critical**: a short-lived popup plus a system beep fire when the dashboard's Overall Web Host Risk crosses into critical, even if the dashboard window isn't focused. A "Notify on Critical" switch toggles this per session; it only re-fires on a fresh transition into critical, not on every refresh while it stays critical. (A real Windows Action Center toast would need a new third-party dependency or shelling out to PowerShell with interpolated text - a plain always-on-top popup avoids both.)
+- **Generalized health-check**: a profile can specify its own custom health-check command in the Connection form instead of the hardcoded Web2py/uWSGI/Nginx `MONITORING_HEALTH_COMMAND`. A custom command only needs to echo the same `__KEY__=value` lines to populate the dashboard cards - anything else still appears in the raw output panel, so the dashboard works for Docker, Kubernetes, or any other stack. Leaving it blank keeps the built-in script (default, unchanged for every existing profile).
 
 ---
 
@@ -278,12 +279,11 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3 implemented):
+Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3, v1.5.4 implemented):
 
-1. v1.5.4 - Monitoring: Alerts & Generalization
-2. v1.5.5 - Security Hardening
-3. v1.6.1 - Distribution & Release Automation
-4. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.5.5 - Security Hardening
+2. v1.6.1 - Distribution & Release Automation
+3. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

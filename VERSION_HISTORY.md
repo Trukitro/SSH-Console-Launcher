@@ -453,10 +453,23 @@ Turn the Monitoring Dashboard from a point-in-time snapshot into something worth
 
 ---
 
+## v1.5.4 - Monitoring: Alerts & Generalization
+
+### Added
+
+- **Critical Alerts**: when the dashboard's Overall Web Host Risk crosses into critical, a short-lived popup and a system beep fire even if the dashboard window isn't focused. A "Notify on Critical" switch on the dashboard toggles this per session (on by default); alerts only re-fire on a fresh transition into critical, not on every refresh while it stays critical.
+- **Generalized Health Check**: a profile can now specify its own custom health-check command in the Connection form, replacing the hardcoded Web2py/uWSGI/Nginx script for that profile. A custom command only needs to echo the same `__KEY__=value` lines to populate the dashboard cards - anything else still appears in the raw output panel. Leaving it blank keeps the built-in check (default, unchanged for every existing profile).
+
+### Purpose
+
+Make the dashboard something you don't have to remember to check, and useful for stacks (Docker, Kubernetes, or anything else) beyond the Web2py/uWSGI/Nginx setup it was originally built for.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.3
+v1.5.4
 ```
 
 ---
