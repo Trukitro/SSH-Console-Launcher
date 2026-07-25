@@ -466,10 +466,23 @@ Make the dashboard something you don't have to remember to check, and useful for
 
 ---
 
+## v1.5.5 - Security Hardening
+
+### Added
+
+- **Clipboard Auto-Clear**: a "Copy Saved Password" button in the Connection form copies the selected profile's password to the clipboard, then clears it again after 20 seconds - but only if the clipboard still holds that exact value, so it won't clobber something else you copied in the meantime.
+- **Connection Audit Log**: every connection opened is appended to a local, append-only log (timestamp, profile name, host, user) at `%APPDATA%\EmbeddedSSHLauncher\audit_log.jsonl`. A new "Connection Audit Log" viewer in the sidebar's Security section shows the most recent entries, newest first.
+
+### Purpose
+
+Reduce the blast radius of a shared or unattended PC: passwords don't linger on the clipboard indefinitely, and there's a local record to answer "who connected to what, and when."
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.4
+v1.5.5
 ```
 
 ---

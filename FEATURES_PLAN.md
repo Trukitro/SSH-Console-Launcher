@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.4  
+**Current stable version:** v1.5.5  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -34,6 +34,7 @@ The app currently supports:
 - File transfer (pscp), per-tab broadcast typing
 - Monitoring history/sparklines, multi-server monitor view
 - Critical alerts (popup + beep), per-profile custom health-check command
+- Clipboard auto-clear for copied passwords, connection audit log
 
 ---
 
@@ -226,16 +227,16 @@ Make the dashboard proactive instead of something you have to remember to check,
 
 ---
 
-## v1.5.5 - Security Hardening
+## v1.5.5 - Security Hardening ✅ Implemented
 
 ### Goal
 
 Reduce the blast radius of a shared or unattended PC.
 
-### Planned Features
+### Implemented
 
-- **Clipboard auto-clear**: after a password is copied/pasted through the app's own dialogs, clear the clipboard after a short delay (only if it still contains that same value, to avoid clobbering something else the user copied since).
-- **Connection audit log**: a local, append-only log of `(timestamp, profile name, host, user)` for every connection opened - useful on a shared machine to answer "who connected to what, and when."
+- **Clipboard auto-clear**: a "Copy Saved Password" button copies a profile's password to the clipboard and clears it again after 20 seconds, but only if the clipboard still holds that exact value (so it won't clobber something else copied since).
+- **Connection audit log**: a local, append-only `(timestamp, profile name, host, user)` log for every connection opened, with a read-only viewer in the sidebar's Security section - useful on a shared machine to answer "who connected to what, and when."
 
 ---
 
@@ -279,11 +280,10 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3, v1.5.4 implemented):
+Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3, v1.5.4, v1.5.5 implemented):
 
-1. v1.5.5 - Security Hardening
-2. v1.6.1 - Distribution & Release Automation
-3. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.6.1 - Distribution & Release Automation
+2. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

@@ -97,6 +97,9 @@ MAX_RECENT = 8
 SESSION_FILE = CONFIG_DIR / "session.json"
 MONITORING_HISTORY_FILE = CONFIG_DIR / "monitoring_history.json"
 MAX_HISTORY_SAMPLES = 30
+AUDIT_LOG_FILE = CONFIG_DIR / "audit_log.jsonl"
+MAX_AUDIT_ENTRIES_SHOWN = 300
+CLIPBOARD_CLEAR_SECONDS = 20
 DEFAULT_SIDEBAR_WIDTH = 320
 MIN_SIDEBAR_WIDTH = 240
 MAX_SIDEBAR_WIDTH = 560
@@ -832,6 +835,48 @@ class MetricsHistoryStore:
         except Exception:
             pass
         return samples
+
+
+class AuditLogStore:
+    """Local, append-only log of every connection opened - who connected to what, and when.
+
+    JSON-lines instead of a single JSON array so appending never needs to
+    read/rewrite the whole (unbounded, ever-growing) file.
+    """
+
+    @staticmethod
+    def record(profile: "SSHProfile") -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": time.time(),
+            "profile": profile.name,
+            "host": profile.host,
+            "user": profile.user,
+        }
+        try:
+            with AUDIT_LOG_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
+    def load(limit: int = MAX_AUDIT_ENTRIES_SHOWN) -> list[dict]:
+        if not AUDIT_LOG_FILE.exists():
+            return []
+        entries: list[dict] = []
+        try:
+            for line in AUDIT_LOG_FILE.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        entries.reverse()
+        return entries[:limit]
 
 
 class PasswordStore:
@@ -2312,6 +2357,90 @@ class MultiServerMonitorWindow(ctk.CTkToplevel if ctk is not None else tk.Toplev
         self.status_label.configure(text="Last refresh completed", text_color=SUCCESS)
 
 
+class AuditLogWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
+    """Read-only viewer for the local connection audit log (who connected to what, and when)."""
+
+    def __init__(self, app: "EmbeddedSSHLauncher"):
+        super().__init__(app)
+        self.app = app
+        self.title("Connection Audit Log")
+        self.geometry("760x520")
+        self.minsize(560, 360)
+        self.transient(app)
+
+        if ctk is not None:
+            self.configure(fg_color=BG)
+
+        self._build_ui()
+        self.refresh_log()
+
+    def _build_ui(self) -> None:
+        if ctk is None:
+            self.text = tk.Text(self)
+            self.text.pack(fill="both", expand=True)
+            return
+
+        root = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        root.pack(fill="both", expand=True)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=0)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Connection Audit Log",
+            text_color=TEXT,
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, padx=18, pady=14, sticky="w")
+
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=0, column=1, padx=18, pady=12, sticky="e")
+        build_button(actions, "Refresh", self.refresh_log, ACCENT, width=90).pack(side="left", padx=4)
+        build_button(actions, "Close", self.destroy, DANGER, width=80).pack(side="left", padx=4)
+
+        self.log_text = tk.Text(
+            root,
+            bg=TERMINAL_BG,
+            fg=TERMINAL_FG,
+            insertbackground=TERMINAL_FG,
+            font=("Cascadia Mono", 10),
+            wrap="none",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=14, pady=14)
+        self.log_text.configure(state="disabled")
+
+    def refresh_log(self) -> None:
+        entries = AuditLogStore.load()
+
+        if ctk is None:
+            if hasattr(self, "text"):
+                self.text.delete("1.0", "end")
+                self.text.insert("1.0", self._format_entries(entries))
+            return
+
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.insert("1.0", self._format_entries(entries))
+        self.log_text.configure(state="disabled")
+
+    def _format_entries(self, entries: list[dict]) -> str:
+        if not entries:
+            return "No connections logged yet."
+        lines = []
+        for entry in entries:
+            try:
+                when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry.get("ts", 0)))
+            except Exception:
+                when = "?"
+            lines.append(f"{when}  |  {entry.get('profile', '?'):<20}  |  {entry.get('user', '?')}@{entry.get('host', '?')}")
+        return "\n".join(lines)
+
+
 class FileTransferWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
     """Simple upload/download panel over pscp - file-picker dialogs, not drag-and-drop."""
 
@@ -3298,6 +3427,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.set_active_terminal(terminal)
         terminal.focus_terminal()
         self.app.record_recent_connection(profile.name)
+        AuditLogStore.record(profile)
 
     def broadcast_raw(self, data: str, source: "EmbeddedTerminal") -> None:
         """Relay a keystroke to every other pane in this tab, if broadcast is on.
@@ -3883,6 +4013,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.port_entry = self._form_row(self.profile_form, "Port", self.port_var)
         self.password_entry = self._form_row(self.profile_form, "Password", self.password_var, show="*")
 
+        if ctk is not None:
+            build_button(
+                self.profile_form, "Copy Saved Password", self.copy_saved_password, CARD_HOVER,
+                height=26, corner_radius=8,
+            ).pack(fill="x", padx=12, pady=(0, 2))
+
         self.env_color_var = tk.StringVar(value="")
         self.env_swatch_buttons: dict[str, "ctk.CTkButton"] = {}
 
@@ -4088,6 +4224,17 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.monitoring_panel, "Active Users / IPs", self.run_active_users_check, CARD_HOVER)
         self._side_button(self.monitoring_panel, "Recent Errors", self.run_recent_errors_check, CARD_HOVER)
         self._side_button(self.monitoring_panel, "Web2py Processes", self.run_web2py_process_check, CARD_HOVER)
+
+        self._sidebar_title("Security")
+
+        self.security_panel = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=CARD,
+            corner_radius=14,
+        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Security")
+        self.security_panel.pack(fill="x", padx=12, pady=(0, 14))
+
+        self._side_button(self.security_panel, "Connection Audit Log", self.open_audit_log, CARD_HOVER)
 
         self._sidebar_title("Documentation")
 
@@ -4532,6 +4679,39 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.refresh_recent()
         self.select_profile(self.selected_profile_index)
         self.status_var.set(f"Saved profile: {name}")
+
+    def copy_saved_password(self) -> None:
+        if self.selected_profile_index is None:
+            show_message(self, "info", APP_NAME, "Select a saved profile first.")
+            return
+
+        profile = self.profiles[self.selected_profile_index]
+        password = self.password_var.get()
+        if not password:
+            try:
+                password = PasswordStore.get(profile.name) or ""
+            except Exception:
+                password = ""
+
+        if not password:
+            show_message(self, "info", APP_NAME, "No saved password for this profile.")
+            return
+
+        self.clipboard_clear()
+        self.clipboard_append(password)
+        self.status_var.set(f"Copied password for {profile.name} to clipboard - clears in {CLIPBOARD_CLEAR_SECONDS}s")
+        self.after(CLIPBOARD_CLEAR_SECONDS * 1000, lambda: self.clear_clipboard_if_unchanged(password))
+
+    def clear_clipboard_if_unchanged(self, expected: str) -> None:
+        try:
+            current = self.clipboard_get()
+        except Exception:
+            return
+        if current == expected:
+            try:
+                self.clipboard_clear()
+            except Exception:
+                pass
 
     def clear_form(self) -> None:
         self.selected_profile_index = None
@@ -5178,6 +5358,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             self.status_var.set("Opened multi-server monitor")
         except Exception as exc:
             show_message(self, "error", APP_NAME, f"Could not open multi-server monitor.\n\n{exc}")
+
+    def open_audit_log(self) -> None:
+        try:
+            AuditLogWindow(self)
+            self.status_var.set("Opened connection audit log")
+        except Exception as exc:
+            show_message(self, "error", APP_NAME, f"Could not open audit log.\n\n{exc}")
 
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:
