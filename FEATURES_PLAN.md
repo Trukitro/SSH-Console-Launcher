@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.9  
+**Current stable version:** v1.5.10  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -38,6 +38,7 @@ The app currently supports:
 - Debug Log Viewer with SSH connection lifecycle logging (v1.5.7)
 - Automatic Windows crash-detail lookup, ConPTY crash trigger mitigation (v1.5.8)
 - Full IDE-style redesign: Activity Bar, custom tab strip, header/footer bars, searchable profile cards, categorized command chips, layout diagrams, monitoring progress bars, dockable Debug Console (v1.5.9)
+- Profile edit/delete clarity, password-saved indicator + show/hide toggle, search-filter selection bug fix (v1.5.10)
 
 ---
 

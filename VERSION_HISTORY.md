@@ -557,10 +557,37 @@ This is a single, all-in-one redesign release (not phased) - the full scope was 
 
 ---
 
+## v1.5.10 - Profile Editing Clarity, Password Visibility, and a Real-World Crash Data Point
+
+### Fixed
+
+- **Wrong profile highlighted while a search filter was active**: `refresh_profiles()`'s button tracking was a plain list built in filtered display order, but `select_profile()`'s highlight loop compared that position against the real profile index - correct with no filter, wrong as soon as `profile_search_var` hid any profile. Button tracking is now a dict keyed by the real profile index; verified with a dedicated functional test (10 checks, including the filtered-selection case) rather than just code review.
+
+### Added
+
+- **Editing/new-profile indicator**: the Connection form now shows "Editing: <name>" or "New Profile" so it's obvious which mode you're in.
+- **Password-saved indicator**: "No password saved" / "🔒 Password saved" shows whether a profile has a stored password, without ever displaying the value.
+- **Show/Hide password toggle**: reveals the password on-screen when needed. The value only ever lives in the form's local `StringVar` for that session - it's never written to `profiles.json`, a log, or any file this app writes to disk.
+- **Per-card delete button**: each profile card now has its own 🗑 button - no need to select a profile first to find Delete at the bottom of the form.
+
+### Crash investigation update
+
+A user hit the `conhost.exe`/`ucrtbase.dll` crash (0xc0000409) again on v1.5.9, 100% of the time across several real connection attempts through the actual installed app - despite v1.5.8's mitigation. Follow-up investigation using the real installed profile/password (never committed anywhere) found:
+
+- One direct reproduction: spawning the real installed `plink.exe` (path: `...\AppData\Local\Programs\SSH Console Launcher\plink.exe` - note the space in "SSH Console Launcher") via `pywinpty` crashed `conhost.exe` on the first attempt, confirmed against a fresh Windows Application event log entry at the exact same timestamp.
+- Two follow-up tests designed to isolate the cause did **not** reproduce it: (a) the same `plink.exe` copied to a different, unrelated folder that also has a space in its name ran cleanly for 6+ seconds, ruling out "any space in the path" as a sufficient trigger on its own; (b) a Tk mainloop simulating the app's actual timer cadence (250ms Debug Console poll, 1s connection-count/profile-display poll, 2s connection watchdog, 35ms terminal flush) spawning the same real `plink.exe` also ran cleanly for 24+ seconds, ruling out this session's added polling load as a sufficient trigger on its own.
+- Net result: the crash is real and was reproduced once, but the root cause is still not isolated - it reproduces 100% of the time when driven through the actual frozen `.exe` with a real rendered GUI, but not reliably through any headless Python reproduction attempted so far (9 attempts total across v1.5.8 and v1.5.9 investigation, 1 hit). The one untested variable is the frozen PyInstaller `.exe` itself (all reproduction attempts used `python.exe` directly) - no way to drive that interactively without a GUI automation tool.
+
+### Notes
+
+No further crash-detection or spawn-path changes in this release - see the investigation update above for what was tried. If the crash recurs, the Debug Console (v1.5.8) will show the same crash-detail lookup as before.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.9
+v1.5.10
 ```
 
 ---

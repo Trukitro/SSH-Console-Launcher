@@ -162,7 +162,7 @@ def _install_stdio_tee() -> None:
 _install_stdio_tee()
 
 
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.5.10"
 APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
@@ -4383,7 +4383,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.active_tab: ConsoleTab | None = None
         self.focused_terminal: EmbeddedTerminal | None = None
 
-        self.profile_buttons: list[ctk.CTkButton] = []
+        self.profile_buttons: dict[int, "ctk.CTkButton"] = {}
         self.command_buttons: list[ctk.CTkButton] = []
         self.recent_buttons: list[ctk.CTkButton] = []
         self.recent_names: list[str] = RecentStore.load()
@@ -4724,6 +4724,15 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         ) if ctk is not None else ttk.LabelFrame(dock_connections, text="Connection")
         self.profile_form.pack(fill="x", padx=12, pady=(0, 14))
 
+        if ctk is not None:
+            self.form_mode_label = ctk.CTkLabel(
+                self.profile_form,
+                text="New Profile",
+                text_color=ACCENT,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            )
+            self.form_mode_label.pack(anchor="w", padx=12, pady=(12, 0))
+
         self.name_var = tk.StringVar()
         self.host_var = tk.StringVar()
         self.user_var = tk.StringVar()
@@ -4737,10 +4746,27 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.password_entry = self._form_row(self.profile_form, "Password", self.password_var, show="*")
 
         if ctk is not None:
+            password_row = ctk.CTkFrame(self.profile_form, fg_color="transparent")
+            password_row.pack(fill="x", padx=12, pady=(0, 2))
+
+            self.password_saved_label = ctk.CTkLabel(
+                password_row, text="No password saved for this profile", text_color=MUTED,
+                font=ctk.CTkFont(size=10),
+            )
+            self.password_saved_label.pack(side="left")
+
+            self.password_visible = False
+            self.show_password_button = ctk.CTkButton(
+                password_row, text="Show", width=52, height=22, corner_radius=6,
+                fg_color=CARD_HOVER, hover_color=CARD_HOVER_2, text_color=TEXT,
+                font=ctk.CTkFont(size=10), command=self.toggle_password_visibility,
+            )
+            self.show_password_button.pack(side="right")
+
             build_button(
                 self.profile_form, "Copy Saved Password", self.copy_saved_password, CARD_HOVER,
                 height=26, corner_radius=8,
-            ).pack(fill="x", padx=12, pady=(0, 2))
+            ).pack(fill="x", padx=12, pady=(4, 2))
 
         self.env_color_var = tk.StringVar(value="")
         self.env_swatch_buttons: dict[str, "ctk.CTkButton"] = {}
@@ -5156,10 +5182,14 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         return title.replace("×", "").strip()
 
     def refresh_profiles(self) -> None:
+        """self.profile_buttons is keyed by the real index into self.profiles (not
+        display position) so select_profile()'s highlight loop stays correct even
+        while a search filter (profile_search_var) hides some profiles.
+        """
         for widget in self.profile_buttons_frame.winfo_children():
             widget.destroy()
 
-        self.profile_buttons = []
+        self.profile_buttons: dict[int, object] = {}
 
         query = self.profile_search_var.get().strip().lower() if hasattr(self, "profile_search_var") else ""
 
@@ -5171,8 +5201,11 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             _env_label, env_border = ENV_TAGS.get(profile.env_color, ENV_TAGS[""])
 
             if ctk is not None:
+                row = ctk.CTkFrame(self.profile_buttons_frame, fg_color="transparent")
+                row.pack(fill="x", pady=4)
+
                 button = ctk.CTkButton(
-                    self.profile_buttons_frame,
+                    row,
                     text=label,
                     command=lambda i=index: self.select_profile(i),
                     fg_color=CARD,
@@ -5184,9 +5217,14 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                     border_width=3 if profile.env_color else 0,
                     border_color=env_border,
                 )
-                button.pack(fill="x", pady=4)
+                button.pack(side="left", fill="x", expand=True)
                 button.bind("<Double-Button-1>", lambda _event, i=index: self.open_profile_by_index(i))
-                self.profile_buttons.append(button)
+                self.profile_buttons[index] = button
+
+                build_button(
+                    row, "🗑", lambda i=index: self.delete_profile_by_index(i), DANGER,
+                    width=36, height=52, corner_radius=12,
+                ).pack(side="left", padx=(4, 0))
             else:
                 button = ttk.Button(
                     self.profile_buttons_frame,
@@ -5194,7 +5232,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                     command=lambda i=index: self.select_profile(i),
                 )
                 button.pack(fill="x")
-                self.profile_buttons.append(button)
+                self.profile_buttons[index] = button
 
         self.refresh_jump_host_options()
 
@@ -5274,16 +5312,22 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.jump_host_var.set(profile.jump_profile_name or "None")
         self.health_check_textbox.delete("1.0", "end")
         self.health_check_textbox.insert("1.0", profile.health_check_command)
+        self._reset_password_visibility()
+        self._update_form_mode_indicators(profile)
 
-        for idx, button in enumerate(self.profile_buttons):
+        for button_index, button in self.profile_buttons.items():
             if ctk is not None:
-                selected = idx == index
+                selected = button_index == index
                 button.configure(
                     fg_color=ACCENT if selected else CARD,
                     hover_color=ACCENT_HOVER if selected else CARD_HOVER,
                 )
 
         self.status_var.set(f"Selected profile: {profile.name}")
+
+    def delete_profile_by_index(self, index: int) -> None:
+        self.select_profile(index)
+        self.delete_profile()
 
     def open_profile_by_index(self, index: int) -> None:
         self.select_profile(index)
@@ -5500,6 +5544,63 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.select_profile(self.selected_profile_index)
         self.status_var.set(f"Saved profile: {name}")
 
+    def _update_form_mode_indicators(self, profile: "SSHProfile | None") -> None:
+        """Makes it obvious whether the Connection form is editing an existing
+        profile or creating a new one, and whether that profile has a saved
+        password - neither indicator ever displays the password itself.
+        """
+        if not hasattr(self, "form_mode_label"):
+            return
+
+        if profile is None:
+            self.form_mode_label.configure(text="New Profile", text_color=ACCENT)
+            self.password_saved_label.configure(text="No password saved for this profile")
+            return
+
+        self.form_mode_label.configure(text=f"Editing: {profile.name}", text_color=WARNING)
+        try:
+            has_password = PasswordStore.get(profile.name) is not None
+        except Exception:
+            has_password = False
+        if has_password:
+            self.password_saved_label.configure(text="🔒 Password saved - leave blank to keep it")
+        else:
+            self.password_saved_label.configure(text="No password saved for this profile")
+
+    def _reset_password_visibility(self) -> None:
+        """Switching profiles/clearing the form must never leave a previous
+        profile's password sitting visible in the field.
+        """
+        if not hasattr(self, "show_password_button"):
+            return
+        self.password_visible = False
+        self.password_entry.configure(show="*")
+        self.show_password_button.configure(text="Show")
+
+    def toggle_password_visibility(self) -> None:
+        self.password_visible = not self.password_visible
+
+        if self.password_visible:
+            # If the field is empty (existing profile - the password isn't pre-filled
+            # unless the user is changing it), pull the saved value from keyring into
+            # the field so there's something to actually reveal. This stays in local
+            # process memory (this StringVar) only - it's never written to profiles.json,
+            # a log, or any file this app writes, and saving the form re-submits the
+            # same unchanged password to keyring exactly like it always did.
+            if not self.password_var.get() and self.selected_profile_index is not None:
+                profile = self.profiles[self.selected_profile_index]
+                try:
+                    saved = PasswordStore.get(profile.name)
+                except Exception:
+                    saved = None
+                if saved:
+                    self.password_var.set(saved)
+            self.password_entry.configure(show="")
+            self.show_password_button.configure(text="Hide")
+        else:
+            self.password_entry.configure(show="*")
+            self.show_password_button.configure(text="Show")
+
     def copy_saved_password(self) -> None:
         if self.selected_profile_index is None:
             show_message(self, "info", APP_NAME, "Select a saved profile first.")
@@ -5545,8 +5646,10 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.refresh_jump_host_options()
         self.jump_host_var.set("None")
         self.health_check_textbox.delete("1.0", "end")
+        self._reset_password_visibility()
+        self._update_form_mode_indicators(None)
 
-        for button in self.profile_buttons:
+        for button in self.profile_buttons.values():
             if ctk is not None:
                 button.configure(fg_color=CARD)
 
