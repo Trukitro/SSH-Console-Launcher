@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.6  
+**Current stable version:** v1.5.7  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -35,6 +35,7 @@ The app currently supports:
 - Monitoring history/sparklines, multi-server monitor view
 - Critical alerts (popup + beep), per-profile custom health-check command
 - Clipboard auto-clear for copied passwords, connection audit log
+- Debug Log Viewer with SSH connection lifecycle logging (v1.5.7)
 
 ---
 
@@ -240,6 +241,44 @@ Reduce the blast radius of a shared or unattended PC.
 
 ---
 
+## v1.5.6 - Window Title Fix and ConPTY Stability Attempt ✅ Implemented
+
+### Implemented
+
+- Fixed `APP_NAME`/window title being stuck on an old version string.
+- Upgraded `pywinpty` 3.0.3 → 3.0.5 as an attempted fix for a reported `conhost.exe` crash during active SSH sessions.
+
+---
+
+## v1.5.7 - Debug Log Viewer & Connection Lifecycle Logging ✅ Implemented
+
+### Goal
+
+Give the app real diagnostic visibility - previously there was no `logging` usage anywhere in the codebase, and no way to see a Tkinter callback exception in the `--windowed` build (no console to print to).
+
+### Implemented
+
+- **Debug Log Viewer**: a new Tools-section window with live, filterable (DEBUG/INFO/WARNING/ERROR) app logging, redirected `stdout`/`stderr`, and captured Tkinter callback exceptions. Copy/Clear buttons, 2,000-entry history buffer.
+- **Connection lifecycle logging**: SSH spawn/disconnect/teardown, jump-host resolution failures, and monitoring command failures/timeouts now log through the same system - additive visibility only, no control-flow changes.
+
+### Notes
+
+This is Phase 1 of a larger UI modernization request (full IDE-style redesign, collapsible/tabbed sidebar). Phase 1 was deliberately scoped to just logging/debug-visibility, since it's additive and low-risk; the sidebar/visual overhaul (**Phase 2**, see below) is a much larger, higher-risk change touching nearly every part of the main window and was deferred to its own iteration so Phase 1's Debug Log Viewer would already be in place to help catch any regressions it introduces.
+
+---
+
+## Phase 2 (proposed, not yet scoped into a version) - UI/UX Modernization
+
+### Goal
+
+Address the rest of the original redesign request: turn the sidebar's 10 stacked sections (Recent, Profiles, Connection, Open Console, Layout/Session, Quick Commands, Monitoring, Security, Documentation, Tools) into a collapsible/tabbed layout instead of one long scrolling list, plus a broader visual/typography consistency pass, closer to an IDE-style (VS Code/Warp/Termius) workspace feel.
+
+### Notes
+
+Deliberately not started yet - needs its own planning pass (CustomTkinter has no built-in accordion/tab-group widget, so this means designing one), and should happen after Phase 1 (v1.5.7) has been running for a while without issues.
+
+---
+
 ## v1.6.1 - Distribution & Release Automation
 
 ### Goal
@@ -280,10 +319,11 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0, v1.5.1, v1.5.2, v1.5.3, v1.5.4, v1.5.5 implemented):
+Recommended next development order (v1.5.0-v1.5.7 implemented):
 
-1. v1.6.1 - Distribution & Release Automation
-2. v2.0.0 - Full Terminal Engine Upgrade
+1. Phase 2 - UI/UX Modernization (sidebar redesign)
+2. v1.6.1 - Distribution & Release Automation
+3. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

@@ -45,7 +45,9 @@ Build portable EXE:
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import os
 import queue
 import re
@@ -56,6 +58,8 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -86,7 +90,79 @@ except Exception:
     winsound = None
 
 
-APP_VERSION = "1.5.5"
+# --- In-app debug logging -------------------------------------------------
+# No console exists in the --windowed PyInstaller build, so anything a bare
+# print() or an uncaught Tkinter callback exception would normally send to
+# stderr previously went nowhere. LOG_QUEUE/LOG_BUFFER feed the DebugLogViewer
+# window; LOG_BUFFER keeps history so opening the viewer late still shows
+# everything logged since startup.
+MAX_LOG_ENTRIES = 2000
+LOG_QUEUE: "queue.Queue[tuple[str, str, str]]" = queue.Queue()
+LOG_BUFFER: "deque[tuple[str, str, str]]" = deque(maxlen=MAX_LOG_ENTRIES)
+
+
+class InMemoryLogHandler(logging.Handler):
+    """Pushes formatted log records onto LOG_QUEUE/LOG_BUFFER instead of a stream."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = (record.levelname, time.strftime("%H:%M:%S"), self.format(record))
+        except Exception:
+            entry = (record.levelname, time.strftime("%H:%M:%S"), record.getMessage())
+        LOG_BUFFER.append(entry)
+        LOG_QUEUE.put(entry)
+
+
+def _setup_app_logger() -> logging.Logger:
+    logger = logging.getLogger("ssh_launcher")
+    logger.setLevel(logging.DEBUG)
+    handler = InMemoryLogHandler()
+    handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
+
+
+APP_LOGGER = _setup_app_logger()
+
+
+class _TeeStream(io.TextIOBase):
+    """Mirrors writes to the real stream (if any) and into the log queue."""
+
+    def __init__(self, real_stream, level: str) -> None:
+        self._real_stream = real_stream
+        self._level = level
+
+    def write(self, text: str) -> int:
+        if self._real_stream is not None:
+            try:
+                self._real_stream.write(text)
+            except Exception:
+                pass
+        stripped = text.strip("\n")
+        if stripped:
+            entry = (self._level, time.strftime("%H:%M:%S"), stripped)
+            LOG_BUFFER.append(entry)
+            LOG_QUEUE.put(entry)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._real_stream is not None:
+            try:
+                self._real_stream.flush()
+            except Exception:
+                pass
+
+
+def _install_stdio_tee() -> None:
+    sys.stdout = _TeeStream(sys.__stdout__, "INFO")
+    sys.stderr = _TeeStream(sys.__stderr__, "ERROR")
+
+
+_install_stdio_tee()
+
+
+APP_VERSION = "1.5.7"
 APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
@@ -2442,6 +2518,163 @@ class AuditLogWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
         return "\n".join(lines)
 
 
+class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
+    """Live viewer over LOG_BUFFER/LOG_QUEUE - app logging, redirected stdout/stderr,
+    and otherwise-invisible Tkinter callback exceptions (see report_callback_exception).
+    """
+
+    SEVERITY_ORDER = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3}
+    SEVERITY_COLOR = {"DEBUG": MUTED, "INFO": TEXT, "WARNING": WARNING, "ERROR": DANGER}
+
+    def __init__(self, app: "EmbeddedSSHLauncher"):
+        super().__init__(app)
+        self.app = app
+        self.title("Debug Log Viewer")
+        self.geometry("900x560")
+        self.minsize(600, 360)
+        self.transient(app)
+
+        if ctk is not None:
+            self.configure(fg_color=BG)
+
+        self.min_severity = "DEBUG"
+        self._poll_after_id: str | None = None
+
+        self._build_ui()
+        self._load_history()
+        self._schedule_poll()
+
+    def _build_ui(self) -> None:
+        if ctk is None:
+            self.text = tk.Text(self)
+            self.text.pack(fill="both", expand=True)
+            return
+
+        root = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        root.pack(fill="both", expand=True)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=0)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Debug Log Viewer",
+            text_color=TEXT,
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, padx=18, pady=14, sticky="w")
+
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=0, column=1, padx=18, pady=12, sticky="e")
+
+        ctk.CTkLabel(actions, text="Severity", text_color=MUTED).pack(side="left", padx=(0, 6))
+        self.severity_menu = ctk.CTkOptionMenu(
+            actions, values=["ALL", "DEBUG", "INFO", "WARNING", "ERROR"],
+            command=self.set_severity_filter, width=100,
+        )
+        self.severity_menu.set("ALL")
+        self.severity_menu.pack(side="left", padx=4)
+
+        build_button(actions, "Copy Logs", self.copy_logs, CARD_HOVER, width=90).pack(side="left", padx=4)
+        build_button(actions, "Clear Logs", self.clear_logs, WARNING, width=90).pack(side="left", padx=4)
+        build_button(actions, "Close", self.destroy, DANGER, width=80).pack(side="left", padx=4)
+
+        self.log_text = tk.Text(
+            root,
+            bg=TERMINAL_BG,
+            fg=TERMINAL_FG,
+            insertbackground=TERMINAL_FG,
+            font=("Cascadia Mono", 10),
+            wrap="none",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=14, pady=14)
+        for level, color in self.SEVERITY_COLOR.items():
+            self.log_text.tag_configure(level, foreground=color)
+        self.log_text.configure(state="disabled")
+
+    def set_severity_filter(self, value: str) -> None:
+        self.min_severity = "DEBUG" if value == "ALL" else value
+        self._load_history()
+
+    def _passes_filter(self, level: str) -> bool:
+        return self.SEVERITY_ORDER.get(level, 0) >= self.SEVERITY_ORDER.get(self.min_severity, 0)
+
+    def _append_entry(self, level: str, when: str, message: str) -> None:
+        if not self._passes_filter(level):
+            return
+        line = f"[{when}] {level:<7} {message}\n"
+        if ctk is None:
+            if hasattr(self, "text"):
+                self.text.insert("end", line)
+            return
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", line, level)
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _load_history(self) -> None:
+        if ctk is not None:
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.configure(state="disabled")
+        elif hasattr(self, "text"):
+            self.text.delete("1.0", "end")
+
+        for level, when, message in list(LOG_BUFFER):
+            self._append_entry(level, when, message)
+
+    def _schedule_poll(self) -> None:
+        self._poll_after_id = self.after(250, self._poll_log_queue)
+
+    def _poll_log_queue(self) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        drained = 0
+        while drained < 200:
+            try:
+                level, when, message = LOG_QUEUE.get_nowait()
+            except queue.Empty:
+                break
+            self._append_entry(level, when, message)
+            drained += 1
+
+        self._schedule_poll()
+
+    def copy_logs(self) -> None:
+        if ctk is None:
+            content = self.text.get("1.0", "end") if hasattr(self, "text") else ""
+        else:
+            content = self.log_text.get("1.0", "end")
+        self.clipboard_clear()
+        self.clipboard_append(content)
+
+    def clear_logs(self) -> None:
+        LOG_BUFFER.clear()
+        if ctk is not None:
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.configure(state="disabled")
+        elif hasattr(self, "text"):
+            self.text.delete("1.0", "end")
+
+    def destroy(self) -> None:
+        if self._poll_after_id is not None:
+            try:
+                self.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+            self._poll_after_id = None
+        super().destroy()
+
+
 class FileTransferWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
     """Simple upload/download panel over pscp - file-picker dialogs, not drag-and-drop."""
 
@@ -2826,16 +3059,26 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         if self.password:
             command.extend(["-pw", self.password])
 
+        redacted_command: list[str] = []
+        redact_next = False
+        for part in command:
+            redacted_command.append("<password>" if redact_next else part)
+            redact_next = part == "-pw"
+
+        APP_LOGGER.info(f"Spawning SSH session for {self.profile.name}: {' '.join(redacted_command)}")
+
         try:
             self.proc = PtyProcess.spawn(
                 command,
                 dimensions=(self.term_columns, self.term_rows),
             )
         except Exception as exc:
+            APP_LOGGER.error(f"Failed to spawn SSH session for {self.profile.name}: {exc}")
             self.write_local("ERROR starting terminal:\n" + str(exc) + "\n")
             self.set_connection_state("disconnected", "Start failed")
             return
 
+        APP_LOGGER.info(f"SSH session started for {self.profile.name}")
         self.alive = True
         self.set_connection_state("connected", "Connected")
         self.sent_password = False
@@ -2866,8 +3109,9 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
                 if epoch != self.session_epoch:
                     break
                 self.output_queue.put((epoch, data))
-            except Exception:
+            except Exception as exc:
                 if self.alive and epoch == self.session_epoch:
+                    APP_LOGGER.warning(f"Reader thread for {self.profile.name} ended: {exc}")
                     self.output_queue.put((epoch, ("STATUS", "disconnected", "Disconnected")))
                     self.output_queue.put((epoch, "\n[session closed]\n"))
                     self.alive = False
@@ -3216,6 +3460,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.focus_terminal()
 
     def close_process_only(self) -> None:
+        APP_LOGGER.info(f"Closing SSH session for {self.profile.name}")
         self.alive = False
         # Invalidate the current reader thread's epoch immediately, before the
         # pty is even closed, so a late read()/exception from it can never be
@@ -3250,6 +3495,8 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         # reader threads could be alive at once.
         if self.reader_thread is not None and self.reader_thread.is_alive():
             self.reader_thread.join(timeout=0.3)
+            if self.reader_thread.is_alive():
+                APP_LOGGER.warning(f"Reader thread for {self.profile.name} did not exit within 0.3s of close()")
 
         self.set_connection_state("disconnected", "Disconnected")
 
@@ -3384,6 +3631,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         plink_path = self.app.find_plink()
 
         if not plink_path:
+            APP_LOGGER.error(f"add_console({profile.name}): plink.exe not found")
             show_message(
                 self,
                 "error",
@@ -3403,11 +3651,13 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
             )
 
             if password is None:
+                APP_LOGGER.info(f"add_console({profile.name}): password prompt cancelled")
                 return
 
             try:
                 PasswordStore.save(profile.name, password)
             except Exception as exc:
+                APP_LOGGER.warning(f"add_console({profile.name}): could not save password to keyring: {exc}")
                 self.app.warn_keyring_failure_once(exc)
 
         proxy_command, ok = self.resolve_proxy_command(profile, plink_path)
@@ -3459,6 +3709,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
         jump_profile = next((p for p in self.app.profiles if p.name == profile.jump_profile_name), None)
         if jump_profile is None:
+            APP_LOGGER.error(f"resolve_proxy_command({profile.name}): jump host '{profile.jump_profile_name}' no longer exists")
             show_message(
                 self, "error", APP_NAME,
                 f"Jump host profile '{profile.jump_profile_name}' no longer exists.",
@@ -3762,6 +4013,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.geometry("1440x820")
         self.minsize(1100, 680)
         self.apply_app_icon()
+
+        APP_LOGGER.info(f"{APP_NAME} starting up")
 
         write_embedded_docs_to_config()
 
@@ -4262,6 +4515,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         self._side_button(self.tools_panel, "Check Requirements", self.check_requirements, CARD_HOVER)
         self._side_button(self.tools_panel, "Open Config Folder", self.open_config_folder, CARD_HOVER)
+        self._side_button(self.tools_panel, "Debug Log Viewer", self.open_debug_log_viewer, CARD_HOVER)
 
     def _sidebar_title(self, text: str) -> None:
         if ctk is not None:
@@ -5367,6 +5621,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         except Exception as exc:
             show_message(self, "error", APP_NAME, f"Could not open audit log.\n\n{exc}")
 
+    def open_debug_log_viewer(self) -> None:
+        try:
+            DebugLogViewer(self)
+            self.status_var.set("Opened debug log viewer")
+        except Exception as exc:
+            show_message(self, "error", APP_NAME, f"Could not open debug log viewer.\n\n{exc}")
+
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:
             return self.focused_terminal.profile
@@ -5413,12 +5674,16 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 output = result.stdout or ""
                 error = result.stderr or ""
                 success = result.returncode == 0
+                if not success:
+                    APP_LOGGER.warning(f"run_remote_monitoring_command({profile.name}): exit code {result.returncode}: {error[:200]}")
                 self.after(0, lambda: callback(success, output, error))
             except subprocess.TimeoutExpired as exc:
+                APP_LOGGER.warning(f"run_remote_monitoring_command({profile.name}): timed out after 35s")
                 out = exc.stdout or ""
                 err = exc.stderr or "Monitoring command timed out."
                 self.after(0, lambda: callback(False, out, err))
             except Exception as exc:
+                APP_LOGGER.error(f"run_remote_monitoring_command({profile.name}): {exc}")
                 self.after(0, lambda: callback(False, "", str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -5605,6 +5870,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             layout_mode = tab_entry.get("layout_mode")
             if layout_mode:
                 tab.set_layout_mode(layout_mode)
+
+    def report_callback_exception(self, exc, val, tb) -> None:
+        """Tkinter calls this for any exception raised inside a bound callback or
+        after() job instead of letting it propagate - the default implementation
+        just prints to stderr, which is invisible in the --windowed build.
+        """
+        APP_LOGGER.error("Unhandled UI exception:\n" + "".join(traceback.format_exception(exc, val, tb)))
 
     def on_close(self) -> None:
         SessionStore.save(self.capture_session_state())

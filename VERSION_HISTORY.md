@@ -492,10 +492,31 @@ Fix a visible, confusing bug (wrong version in the title) and attempt a fix for 
 
 ---
 
+## v1.5.7 - Debug Log Viewer & Connection Lifecycle Logging
+
+### Added
+
+- **Debug Log Viewer** (Tools sidebar section): a new live, filterable window over the app's internal logging - `stdout`/`stderr` (now redirected instead of going nowhere in the `--windowed` build), the SSH connection lifecycle, and otherwise-invisible Tkinter callback exceptions (Tkinter's default `report_callback_exception` just prints to a stderr that doesn't exist in the frozen `.exe`; it's now overridden to log the full traceback). Filter by severity (DEBUG/INFO/WARNING/ERROR), **Copy Logs**, **Clear Logs**, keeps the last 2,000 entries so history from before the window was opened isn't lost.
+- **Connection lifecycle logging**: SSH session spawn (command logged with the password redacted), spawn failures, reader-thread disconnects, session teardown (including if the reader thread doesn't exit within its 0.3s join timeout - previously silent), jump-host resolution failures, and monitoring/health-check command failures/timeouts are now all logged - additive visibility only, no changes to the existing connection-handling logic itself.
+
+### Fixed
+
+- `APP_VERSION` itself was still stuck at "1.5.5" in the v1.5.6 release despite the window-title *mechanism* being fixed - the constant just never got bumped in that release. Corrected, and the title now genuinely reflects the running version.
+
+### Purpose
+
+Give the app real diagnostic visibility for the first time - previously there was no `logging` usage anywhere and no way to see an exception that happened outside a visible dialog. Directly useful for confirming (or further diagnosing) the v1.5.6 `conhost.exe` crash investigation if it recurs.
+
+### Notes
+
+This is the first iteration of a larger UI modernization effort (IDE-style layout, collapsible/tabbed sidebar) - deliberately scoped to just the logging/debug-visibility piece for now, kept separate from the higher-risk sidebar/visual overhaul so it could ship without touching the rest of a live, daily-used app.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.6
+v1.5.7
 ```
 
 ---
