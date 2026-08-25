@@ -86,7 +86,8 @@ except Exception:
     winsound = None
 
 
-APP_NAME = "Embedded SSH Launcher v1.5.2"
+APP_VERSION = "1.5.5"
+APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
 CONFIG_FILE = CONFIG_DIR / "profiles.json"

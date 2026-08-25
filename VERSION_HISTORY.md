@@ -479,10 +479,23 @@ Reduce the blast radius of a shared or unattended PC: passwords don't linger on 
 
 ---
 
+## v1.5.6 - Window Title Fix and ConPTY Stability Attempt
+
+### Fixed
+
+- **Window title stuck on v1.5.2**: `APP_NAME` (used for the window title and every dialog title) was a hardcoded string that never got updated across the v1.5.3-v1.5.5 releases, so the app kept reporting itself as "v1.5.2" no matter which version was actually installed and running. It's now derived from a single `APP_VERSION` constant.
+- **Reported `conhost.exe` crash during active SSH sessions**: a user reported the app crashing mid-session with a `plink.exe - Application Error (0xc0000142)` dialog. Investigation via the Windows Application event log showed the actual faulting process was `conhost.exe` (Windows's own console host, which ConPTY uses to host the interactive `plink.exe` session) crashing with a stack buffer overrun in `ucrtbase.dll` - not a corrupted `plink.exe` (hash and version were verified intact) and not something reproducible with a simple non-interactive spawn test. `pywinpty` (the ConPTY wrapper used for interactive terminals) was two patch versions behind (3.0.3 vs. the current 3.0.5) and has been upgraded as the most likely, lowest-risk mitigation. This could not be confirmed fixed without a live SSH session to reproduce against, so treat it as an attempted fix pending real-world confirmation.
+
+### Purpose
+
+Fix a visible, confusing bug (wrong version in the title) and attempt a fix for a reported crash affecting active terminal sessions.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.5
+v1.5.6
 ```
 
 ---
