@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.8  
+**Current stable version:** v1.5.9  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -37,6 +37,7 @@ The app currently supports:
 - Clipboard auto-clear for copied passwords, connection audit log
 - Debug Log Viewer with SSH connection lifecycle logging (v1.5.7)
 - Automatic Windows crash-detail lookup, ConPTY crash trigger mitigation (v1.5.8)
+- Full IDE-style redesign: Activity Bar, custom tab strip, header/footer bars, searchable profile cards, categorized command chips, layout diagrams, monitoring progress bars, dockable Debug Console (v1.5.9)
 
 ---
 
@@ -286,15 +287,25 @@ Could not reproduce the `conhost.exe` crash locally despite direct testing again
 
 ---
 
-## Phase 2 (proposed, not yet scoped into a version) - UI/UX Modernization
+## v1.5.9 - Full IDE-Style Redesign & Crash Resilience ✅ Implemented
 
 ### Goal
 
-Address the rest of the original redesign request: turn the sidebar's 10 stacked sections (Recent, Profiles, Connection, Open Console, Layout/Session, Quick Commands, Monitoring, Security, Documentation, Tools) into a collapsible/tabbed layout instead of one long scrolling list, plus a broader visual/typography consistency pass, closer to an IDE-style (VS Code/Warp/Termius) workspace feel.
+Address the rest of the original redesign request: turn the sidebar's 10 stacked sections into an IDE-style (VS Code/Termius) workspace, in a single all-in-one release rather than a further-phased rollout.
+
+### Implemented
+
+- Activity Bar + dock panels replacing the long scrolling sidebar.
+- Header bar (active connection + environment badge + Broadcast Typing), footer status bar (connection count + Debug Console toggle).
+- Custom `TabStrip` replacing `ttk.Notebook` (real close buttons, accent-highlighted active tab), verified with a dedicated functional test of the full tab lifecycle.
+- Pane sub-header additions (elapsed time, Duplicate) and a distinct crashed-session state.
+- Searchable profile cards, categorized Quick Command chips, layout selector diagrams, monitoring card progress bars.
+- Dockable bottom Debug Console (replacing the standalone Debug Log Viewer window).
+- New base color tokens throughout.
 
 ### Notes
 
-Deliberately not started yet - needs its own planning pass (CustomTkinter has no built-in accordion/tab-group widget, so this means designing one), and should happen after Phase 1 (v1.5.7) has been running for a while without issues.
+See `VERSION_HISTORY.md` v1.5.9 for full detail, including the honesty note on GUI verification limitations for the tab strip replacement.
 
 ---
 
@@ -338,11 +349,10 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0-v1.5.8 implemented):
+Recommended next development order (v1.5.0-v1.5.9 implemented):
 
-1. Phase 2 - UI/UX Modernization (sidebar redesign)
-2. v1.6.1 - Distribution & Release Automation
-3. v2.0.0 - Full Terminal Engine Upgrade
+1. v1.6.1 - Distribution & Release Automation
+2. v2.0.0 - Full Terminal Engine Upgrade
 
 ---
 

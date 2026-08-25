@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.8  
+**Current version:** 1.5.9  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -25,6 +25,18 @@ The app is designed for a maximum practical workflow of around 1 to 4 terminals 
 ---
 
 ## Main Features
+
+### IDE-Style Workspace (v1.5.9)
+
+The app was rebuilt around an IDE-style layout (VS Code/Termius-inspired):
+
+- **Activity Bar**: a narrow icon rail (Connections, Layouts, Quick Commands, Monitoring, Debug Logs, Settings) replaces the old single long scrolling sidebar - each icon swaps in a focused dock panel instead of scrolling past everything else.
+- **Header bar**: shows the currently focused connection and its environment badge (Production/Staging/Development, color-coded), plus a Broadcast Typing toggle promoted out of the sidebar.
+- **Footer status bar**: a live connection count and a one-click Debug Console toggle.
+- **Redesigned tabs**: a custom tab strip (real close buttons, accent-highlighted active tab) replaces the native Windows tab control, which couldn't be themed to match.
+- **Terminal pane headers**: each pane now shows session elapsed time and a Duplicate action alongside the existing Focus/Clear/Reconnect/Close controls; a crashed session (vs. a normal disconnect) is now visually distinct with a one-click Reconnect prompt.
+- **Searchable profile cards, categorized Quick Command chips, and layout buttons with small visual diagrams** replace their older plain-list equivalents.
+- **Dockable Debug Console**: the Debug Log Viewer is now a bottom panel you toggle open/closed instead of a separate window.
 
 ### SSH Profile Management
 
@@ -448,10 +460,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.8
+v1.5.9
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, v1.5.7's Debug Log Viewer and SSH connection lifecycle logging, and v1.5.8's automatic crash-detail lookup and a fix for a possible ConPTY crash trigger. See `VERSION_HISTORY.md` for details.
+This version includes v1.5.9's full IDE-style redesign (Activity Bar, redesigned tab strip, header/footer bars, searchable profile cards, categorized Quick Command chips, layout diagrams, monitoring progress bars, dockable Debug Console, and a crashed-session pane state) plus everything from prior versions: the modern UI foundation, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, v1.5.7's Debug Log Viewer and SSH connection lifecycle logging, and v1.5.8's automatic crash-detail lookup and a fix for a possible ConPTY crash trigger. See `VERSION_HISTORY.md` for details.
 
 ---
 

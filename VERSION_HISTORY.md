@@ -530,10 +530,37 @@ This is the first iteration of a larger UI modernization effort (IDE-style layou
 
 ---
 
+## v1.5.9 - Full IDE-Style Redesign & Crash Resilience
+
+### Added
+
+- **Activity Bar + dock panels**: the single long scrolling sidebar (10 stacked sections) is replaced with a VS Code-style icon rail (Connections, Layouts, Quick Commands, Monitoring, Debug Logs, Settings) - clicking an icon swaps in a focused dock panel instead of scrolling past everything else. The active dock and its width both persist across restarts.
+- **Header bar**: shows the focused connection's name/host and a color-coded environment badge (Production/Staging/Development), plus a Broadcast Typing toggle promoted out of the sidebar (still mirrors the per-tab switch - both are bound to the same variable).
+- **Footer status bar**: a live connection count (updates every second) and a one-click Debug Console toggle.
+- **Redesigned tab strip**: a custom-built tab bar (`TabStrip`) replaces the native `ttk.Notebook`, which Windows' theme engine can't restyle beyond native chrome. Real close buttons per tab replace the old coordinate-heuristic "was this click on the × text" detection entirely - simpler and more reliable than what it replaced, not just a reskin. Every existing tab operation (create, close, rename, session restore) keeps working via a drop-in-compatible API, verified with a dedicated functional test exercising the full tab lifecycle before shipping.
+- **Terminal pane headers**: each pane shows session elapsed time and a new Duplicate action (opens the same profile in a new pane in the same tab) alongside Focus/Clear/Reconnect/Close.
+- **Crashed session state**: a pane that dies from a detected native crash (see v1.5.8's Windows event log lookup) now shows a distinct "⚠ Crashed" indicator instead of the same "Disconnected" state a normal drop uses, making it obvious a reconnect (not just a dropped connection) is needed.
+- **Searchable profile cards**: a search box above the Profiles list filters by name or host as you type.
+- **Categorized Quick Command chips**: commands are grouped by category (a new optional field) and rendered as a wrapping chip grid instead of a vertical button stack.
+- **Layout selector diagrams**: each Layout/Session button now shows a small canvas diagram of its pane arrangement alongside the label.
+- **Monitoring progress bars**: the Load/RAM/Disk/Connections cards gained a color-coded progress bar under their sparkline.
+- **Dockable Debug Console**: the Debug Log Viewer is now a bottom panel toggled open/closed (Activity Bar icon or footer button) instead of a separate window - keeps polling continuously, so nothing logged while it's closed is lost.
+- **Startup/mainloop crash catch-all**: any exception escaping construction or the Tk mainloop itself (beyond what `report_callback_exception` already covers) is now logged and shown as one dark-themed dialog instead of a bare Windows crash dialog with no log trail.
+
+### Design tokens
+
+New base palette (`BG #1E1E2E`, `PANEL`/`CARD #25263A`, `ACCENT #4E87F6`) and dedicated environment colors (Production `#FF5252`, Staging `#FFB300`, Dev `#4CAF50`), replacing the previous slate-blue theme throughout every window in the app.
+
+### Notes
+
+This is a single, all-in-one redesign release (not phased) - the full scope was reviewed and approved as one unit rather than split across versions. The tab strip replacement was the highest-risk single change (touches tab creation/close/rename/session-restore); it was verified with an actual functional test script driving the real tab lifecycle end-to-end, in addition to the usual syntax-check + smoke-test + code-review pattern used elsewhere in this app, since there's no visual GUI testing tool available for this native Tkinter app.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.8
+v1.5.9
 ```
 
 ---

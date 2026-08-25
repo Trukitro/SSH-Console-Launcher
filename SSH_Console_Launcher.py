@@ -162,7 +162,7 @@ def _install_stdio_tee() -> None:
 _install_stdio_tee()
 
 
-APP_VERSION = "1.5.8"
+APP_VERSION = "1.5.9"
 APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
@@ -180,6 +180,9 @@ CLIPBOARD_CLEAR_SECONDS = 20
 DEFAULT_SIDEBAR_WIDTH = 320
 MIN_SIDEBAR_WIDTH = 240
 MAX_SIDEBAR_WIDTH = 560
+ACTIVITY_BAR_WIDTH = 56
+DOCK_SECTIONS = ("connections", "layouts", "commands", "monitoring", "settings")
+DEFAULT_ACTIVE_DOCK = "connections"
 DOC_README_FILE = "README.md"
 DOC_VERSION_FILE = "VERSION_HISTORY.md"
 DOC_FEATURES_FILE = "FEATURES_PLAN.md"
@@ -196,13 +199,13 @@ ICON_PNG_FILE = "app_icon_128.png"
 MAX_PANES_PER_TAB = 4
 TAB_CLOSE_SUFFIX = "   ×"
 
-BG = "#0f172a"
-PANEL = "#111827"
-PANEL_2 = "#1f2937"
-CARD = "#1e293b"
-CARD_HOVER = "#334155"
-ACCENT = "#2563eb"
-ACCENT_HOVER = "#1d4ed8"
+BG = "#1E1E2E"
+PANEL = "#25263A"
+PANEL_2 = "#2E2F45"
+CARD = "#25263A"
+CARD_HOVER = "#34354D"
+ACCENT = "#4E87F6"
+ACCENT_HOVER = "#3E6FD1"
 SUCCESS = "#16a34a"
 SUCCESS_HOVER = "#15803d"
 DANGER = "#dc2626"
@@ -213,6 +216,12 @@ TEXT = "#e5e7eb"
 MUTED = "#9ca3af"
 TERMINAL_BG = "#050505"
 TERMINAL_FG = "#f8fafc"
+
+# IDE-redesign environment tokens (distinct from the generic DANGER/WARNING/SUCCESS
+# semantic colors above, which are also used for unrelated things like delete buttons).
+ENV_PROD_COLOR = "#FF5252"
+ENV_STAGING_COLOR = "#FFB300"
+ENV_DEV_COLOR = "#4CAF50"
 
 # Secondary near-black panel tones (markdown viewer body / blockquote backgrounds)
 PANEL_DARK = "#0b1220"
@@ -225,9 +234,9 @@ HIGHLIGHT_SEARCH = "#facc15"
 # Per-profile environment tags: value -> (display label, border color)
 ENV_TAGS = {
     "": ("None", CARD),
-    "prod": ("Production", DANGER),
-    "staging": ("Staging", WARNING),
-    "dev": ("Development", SUCCESS),
+    "prod": ("Production", ENV_PROD_COLOR),
+    "staging": ("Staging", ENV_STAGING_COLOR),
+    "dev": ("Development", ENV_DEV_COLOR),
 }
 ENV_TAG_ORDER = ["", "prod", "staging", "dev"]
 
@@ -254,7 +263,7 @@ def tint(hex_color: str, factor: float) -> str:
 
 # Secondary hover shade for buttons whose fg_color is already CARD_HOVER
 # (e.g. "New", "Split Current Tab") - must differ from CARD_HOVER itself.
-CARD_HOVER_2 = "#475569"
+CARD_HOVER_2 = "#3F4160"
 
 _HOVER_COLOR_MAP = {
     ACCENT: ACCENT_HOVER,
@@ -490,17 +499,27 @@ def query_recent_crash_details(process_names: tuple[str, ...], within_seconds: i
         return None
 
 
-def log_crash_details_async(context: str) -> None:
+def log_crash_details_async(context: str, on_result=None) -> None:
     """Fire-and-forget: check the Windows Application event log for a recent
     conhost.exe/plink.exe crash and log full details if one is found, from a
     background thread so the UI thread never blocks on the ~1-2s PowerShell call.
+
+    on_result, if given, is called from this background thread with a single
+    bool (True if a matching crash record was found) - callers touching Tk
+    widgets from it must marshal back via their own self.after(0, ...).
     """
     def worker() -> None:
         details = query_recent_crash_details(("conhost.exe", "plink.exe"))
+        found = details is not None
         if details:
             APP_LOGGER.error(f"{context}: found a matching Windows crash event:\n{details}")
         else:
             APP_LOGGER.warning(f"{context}: no matching conhost.exe/plink.exe crash event found in the last 20s")
+        if on_result is not None:
+            try:
+                on_result(found)
+            except Exception:
+                pass
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -508,6 +527,7 @@ def log_crash_details_async(context: str) -> None:
 CONNECTED = "#22c55e"
 DISCONNECTED = "#ef4444"
 CONNECTING = "#f59e0b"
+CRASHED = "#d946ef"
 
 ANSI_COLOR_MAP = {
     "default": TERMINAL_FG,
@@ -763,6 +783,7 @@ class SSHProfile:
 class QuickCommand:
     name: str
     command: str
+    category: str = ""  # "" displays under "General" - see CommandStore.default_commands
 
 
 class ProfileStore:
@@ -792,11 +813,11 @@ class CommandStore:
     @staticmethod
     def default_commands() -> list[QuickCommand]:
         return [
-            QuickCommand("htop", "htop"),
-            QuickCommand("web2py folder", "cd /home/www-data/web2py/"),
-            QuickCommand("tail web2py.log", "tail -f web2py.log"),
-            QuickCommand("uwsgitop", "sudo uwsgitop /tmp/stats.socket"),
-            QuickCommand("clear", "clear"),
+            QuickCommand("htop", "htop", category="System"),
+            QuickCommand("clear", "clear", category="System"),
+            QuickCommand("web2py folder", "cd /home/www-data/web2py/", category="Web2py"),
+            QuickCommand("uwsgitop", "sudo uwsgitop /tmp/stats.socket", category="Web2py"),
+            QuickCommand("tail web2py.log", "tail -f web2py.log", category="Logs"),
         ]
 
     @staticmethod
@@ -832,26 +853,48 @@ class CommandStore:
 
 
 class UIState:
-    """Small persisted UI preferences (currently just the sidebar width)."""
+    """Small persisted UI preferences (sidebar width, active Activity Bar dock)."""
+
+    @staticmethod
+    def _load_all() -> dict:
+        if not UI_STATE_FILE.exists():
+            return {}
+        try:
+            raw = json.loads(UI_STATE_FILE.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _save_key(key: str, value) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        data = UIState._load_all()
+        data[key] = value
+        try:
+            UI_STATE_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     @staticmethod
     def load_sidebar_width() -> int:
-        if not UI_STATE_FILE.exists():
-            return DEFAULT_SIDEBAR_WIDTH
         try:
-            raw = json.loads(UI_STATE_FILE.read_text(encoding="utf-8"))
-            width = int(raw.get("sidebar_width", DEFAULT_SIDEBAR_WIDTH))
+            width = int(UIState._load_all().get("sidebar_width", DEFAULT_SIDEBAR_WIDTH))
             return max(MIN_SIDEBAR_WIDTH, min(MAX_SIDEBAR_WIDTH, width))
         except Exception:
             return DEFAULT_SIDEBAR_WIDTH
 
     @staticmethod
     def save_sidebar_width(width: int) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            UI_STATE_FILE.write_text(json.dumps({"sidebar_width": width}, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        UIState._save_key("sidebar_width", width)
+
+    @staticmethod
+    def load_active_dock() -> str:
+        dock = UIState._load_all().get("active_dock", DEFAULT_ACTIVE_DOCK)
+        return dock if dock in DOCK_SECTIONS else DEFAULT_ACTIVE_DOCK
+
+    @staticmethod
+    def save_active_dock(key: str) -> None:
+        UIState._save_key("active_dock", key)
 
 
 class RecentStore:
@@ -1422,7 +1465,7 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
                 textvariable=self.search_var,
                 placeholder_text="Search in document...",
                 fg_color=PANEL,
-                border_color="#334155",
+                border_color=CARD_HOVER,
                 text_color=TEXT,
                 height=34,
                 corner_radius=10,
@@ -1450,7 +1493,7 @@ class MarkdownDocumentWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel
             pady=18,
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground="#334155",
+            highlightbackground=CARD_HOVER,
         )
         self.text.grid(row=0, column=0, sticky="nsew")
 
@@ -1743,8 +1786,13 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             if key in sparkline_keys:
                 detail_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 4))
                 sparkline = tk.Canvas(card, width=90, height=24, bg=CARD, highlightthickness=0, bd=0)
-                sparkline.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 12))
+                sparkline.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 6))
                 self.card_labels[key]["sparkline"] = sparkline
+
+                progress = ctk.CTkProgressBar(card, height=6, corner_radius=3, progress_color=ACCENT)
+                progress.set(0)
+                progress.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 12))
+                self.card_labels[key]["progress"] = progress
             else:
                 detail_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 14))
 
@@ -1958,8 +2006,13 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             "disk": [s.get("disk_pct", 0.0) for s in samples],
             "connections": [s.get("connections", 0) for s in samples],
         }
+        # connections isn't itself a percentage - normalize against the same 500
+        # "critical" threshold update_cards() already uses for web_est, so its bar
+        # fills the same way the other 3 (already 0-100 percentages) do.
+        progress_max = {"load": 100, "ram": 100, "disk": 100, "connections": 500}
         for key, values in series.items():
             self.draw_sparkline(key, values)
+            self.update_card_progress(key, values[-1] if values else 0, progress_max[key])
 
     def draw_sparkline(self, key: str, values: list[float]) -> None:
         labels = self.card_labels.get(key)
@@ -1990,6 +2043,25 @@ class MonitoringDashboardWindow(ctk.CTkToplevel if ctk is not None else tk.Tople
             points.extend([x, y])
 
         canvas.create_line(*points, fill=ACCENT, width=2, smooth=True)
+
+    def update_card_progress(self, key: str, value: float, max_value: float) -> None:
+        labels = self.card_labels.get(key)
+        if not labels or "progress" not in labels:
+            return
+        progress: "ctk.CTkProgressBar" = labels["progress"]
+        try:
+            if not progress.winfo_exists():
+                return
+        except Exception:
+            return
+
+        fraction = max(0.0, min(1.0, value / max_value)) if max_value else 0.0
+        color = DANGER if fraction >= 0.9 else WARNING if fraction >= 0.7 else ACCENT
+        try:
+            progress.configure(progress_color=color)
+            progress.set(fraction)
+        except Exception:
+            pass
 
     def update_raw_output(self, output: str) -> None:
         if not self.winfo_exists():
@@ -2565,24 +2637,23 @@ class AuditLogWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
         return "\n".join(lines)
 
 
-class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
-    """Live viewer over LOG_BUFFER/LOG_QUEUE - app logging, redirected stdout/stderr,
-    and otherwise-invisible Tkinter callback exceptions (see report_callback_exception).
+class DebugLogViewer(ctk.CTkFrame if ctk is not None else ttk.Frame):
+    """Dockable bottom log console (VS Code-style) over LOG_BUFFER/LOG_QUEUE - app
+    logging, redirected stdout/stderr, and otherwise-invisible Tkinter callback
+    exceptions (see report_callback_exception). Built once and toggled
+    grid()/grid_remove() by EmbeddedSSHLauncher.toggle_debug_console(), not
+    recreated per open - so it keeps polling (and its history) across toggles.
     """
 
     SEVERITY_ORDER = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3}
     SEVERITY_COLOR = {"DEBUG": MUTED, "INFO": TEXT, "WARNING": WARNING, "ERROR": DANGER}
 
-    def __init__(self, app: "EmbeddedSSHLauncher"):
-        super().__init__(app)
-        self.app = app
-        self.title("Debug Log Viewer")
-        self.geometry("900x560")
-        self.minsize(600, 360)
-        self.transient(app)
-
+    def __init__(self, parent: tk.Widget, app: "EmbeddedSSHLauncher"):
         if ctk is not None:
-            self.configure(fg_color=BG)
+            super().__init__(parent, fg_color=PANEL, corner_radius=0)
+        else:
+            super().__init__(parent)
+        self.app = app
 
         self.min_severity = "DEBUG"
         self._poll_after_id: str | None = None
@@ -2593,9 +2664,9 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
         self._schedule_poll()
 
     def _drain_stale_queue(self) -> None:
-        """LOG_QUEUE accumulates from app startup and nothing consumes it until a
-        viewer is open. _load_history() already renders everything from LOG_BUFFER,
-        so any backlog sitting in LOG_QUEUE at open time would otherwise get
+        """LOG_QUEUE accumulates from app startup and nothing consumes it until this
+        panel exists. _load_history() already renders everything from LOG_BUFFER, so
+        any backlog sitting in LOG_QUEUE at construction time would otherwise get
         rendered a second time by the first _poll_log_queue() call.
         """
         while True:
@@ -2606,28 +2677,26 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
 
     def _build_ui(self) -> None:
         if ctk is None:
-            self.text = tk.Text(self)
+            self.text = tk.Text(self, height=12)
             self.text.pack(fill="both", expand=True)
             return
 
-        root = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        root.pack(fill="both", expand=True)
-        root.grid_columnconfigure(0, weight=1)
-        root.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        header = ctk.CTkFrame(root, fg_color=PANEL, corner_radius=0)
+        header = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             header,
-            text="Debug Log Viewer",
+            text="Debug Console",
             text_color=TEXT,
-            font=ctk.CTkFont(size=18, weight="bold"),
-        ).grid(row=0, column=0, padx=18, pady=14, sticky="w")
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, padx=14, pady=8, sticky="w")
 
         actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.grid(row=0, column=1, padx=18, pady=12, sticky="e")
+        actions.grid(row=0, column=1, padx=14, pady=6, sticky="e")
 
         ctk.CTkLabel(actions, text="Severity", text_color=MUTED).pack(side="left", padx=(0, 6))
         self.severity_menu = ctk.CTkOptionMenu(
@@ -2639,10 +2708,11 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
 
         build_button(actions, "Copy Logs", self.copy_logs, CARD_HOVER, width=90).pack(side="left", padx=4)
         build_button(actions, "Clear Logs", self.clear_logs, WARNING, width=90).pack(side="left", padx=4)
-        build_button(actions, "Close", self.destroy, DANGER, width=80).pack(side="left", padx=4)
+        build_button(actions, "Close", self.app.toggle_debug_console, DANGER, width=80).pack(side="left", padx=4)
 
         self.log_text = tk.Text(
-            root,
+            self,
+            height=12,
             bg=TERMINAL_BG,
             fg=TERMINAL_FG,
             insertbackground=TERMINAL_FG,
@@ -2651,7 +2721,7 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
             borderwidth=0,
             highlightthickness=0,
         )
-        self.log_text.grid(row=1, column=0, sticky="nsew", padx=14, pady=14)
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         for level, color in self.SEVERITY_COLOR.items():
             self.log_text.tag_configure(level, foreground=color)
         self.log_text.configure(state="disabled")
@@ -2724,15 +2794,6 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
             self.log_text.configure(state="disabled")
         elif hasattr(self, "text"):
             self.text.delete("1.0", "end")
-
-    def destroy(self) -> None:
-        if self._poll_after_id is not None:
-            try:
-                self.after_cancel(self._poll_after_id)
-            except Exception:
-                pass
-            self._poll_after_id = None
-        super().destroy()
 
 
 class FileTransferWindow(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
@@ -2881,7 +2942,11 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.header = None
         self.title_label = None
         self.status_label = None
+        self.elapsed_label = None
+        self.owner_tab: "ConsoleTab | None" = None
         self.connection_state = "disconnected"
+        self.crashed = False
+        self.connected_at: float | None = None
         self.style_tag_cache: dict[tuple[str, str, bool, bool], str] = {}
 
         self._build_ui()
@@ -2911,12 +2976,24 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             )
             self.status_label.pack(side="left", padx=(8, 4), pady=6)
 
+            self.elapsed_label = ctk.CTkLabel(
+                self.header,
+                text="",
+                text_color=MUTED,
+                font=ctk.CTkFont(size=11),
+            )
+            self.elapsed_label.pack(side="left", padx=(4, 4), pady=6)
+
             build_button(
                 self.header, "Close", self.request_close, DANGER, width=70, height=28
             ).pack(side="right", padx=(4, 8), pady=6)
 
             build_button(
                 self.header, "Reconnect", self.reconnect, WARNING, width=92, height=28
+            ).pack(side="right", padx=4, pady=6)
+
+            build_button(
+                self.header, "Duplicate", self.duplicate_pane, CARD_HOVER, width=80, height=28
             ).pack(side="right", padx=4, pady=6)
 
             build_button(
@@ -2963,7 +3040,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             bg=TERMINAL_BG,
             fg=TERMINAL_FG,
             insertbackground=TERMINAL_FG,
-            selectbackground="#334155",
+            selectbackground=CARD_HOVER,
             font=("Cascadia Mono", 9),
             state="disabled",
             padx=6,
@@ -3021,15 +3098,28 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
 
     def set_connection_state(self, state: str, message: str | None = None) -> None:
         """Update the visible connection status indicator for this terminal pane."""
+        previous_state = self.connection_state
         self.connection_state = state
 
         if state == "connected":
+            # Only stamp connected_at on a genuine transition into "connected" - this
+            # gets called again every ~2s by the watchdog while already connected, and
+            # resetting it every time would make the pane header's elapsed-time display
+            # never advance past 0.
+            if previous_state != "connected" or self.connected_at is None:
+                self.connected_at = time.time()
+            self.crashed = False
             label_text = "● Connected" if message is None else f"● {message}"
             color = CONNECTED
         elif state == "connecting":
             label_text = "● Connecting" if message is None else f"● {message}"
             color = CONNECTING
+        elif state == "crashed":
+            self.connected_at = None
+            label_text = "⚠ Crashed - click Reconnect" if message is None else f"⚠ {message}"
+            color = CRASHED
         else:
+            self.connected_at = None
             label_text = "● Disconnected" if message is None else f"● {message}"
             color = DISCONNECTED
 
@@ -3045,6 +3135,18 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
     def mark_disconnected(self, reason: str = "Disconnected") -> None:
         self.alive = False
         self.set_connection_state("disconnected", reason)
+
+    def _on_crash_check_result(self, found: bool, epoch: int) -> None:
+        """Called back (already marshaled onto the Tk thread) once the async Windows
+        crash-event lookup for this session's disconnect completes. Only promotes to
+        the distinct "crashed" state if a real OS crash record was found and the pane
+        hasn't since moved on to a new session (epoch changed - e.g. user hit Reconnect
+        before the ~1-2s PowerShell lookup finished).
+        """
+        if not found or epoch != self.session_epoch:
+            return
+        self.crashed = True
+        self.set_connection_state("crashed", "Crashed - click Reconnect")
 
     def set_active_visual(self, active: bool) -> None:
         if ctk is None or self.header is None:
@@ -3178,7 +3280,10 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             except Exception as exc:
                 if self.alive and epoch == self.session_epoch:
                     APP_LOGGER.warning(f"Reader thread for {self.profile.name} ended: {exc}")
-                    log_crash_details_async(f"Reader thread for {self.profile.name} ended unexpectedly")
+                    log_crash_details_async(
+                        f"Reader thread for {self.profile.name} ended unexpectedly",
+                        on_result=lambda found, ep=epoch: self.after(0, lambda: self._on_crash_check_result(found, ep)),
+                    )
                     self.output_queue.put((epoch, ("STATUS", "disconnected", "Disconnected")))
                     self.output_queue.put((epoch, "\n[session closed]\n"))
                     self.alive = False
@@ -3208,14 +3313,36 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             if hasattr(self.proc, "isalive") and not self.proc.isalive():
                 self.alive = False
                 APP_LOGGER.warning(f"Connection watchdog for {self.profile.name}: underlying process is no longer alive")
-                log_crash_details_async(f"Connection watchdog for {self.profile.name}: process died unexpectedly")
+                log_crash_details_async(
+                    f"Connection watchdog for {self.profile.name}: process died unexpectedly",
+                    on_result=lambda found, ep=self.session_epoch: self.after(0, lambda: self._on_crash_check_result(found, ep)),
+                )
                 self.set_connection_state("disconnected", "Disconnected")
                 return
         except Exception:
             pass
 
         self.set_connection_state("connected", "Connected")
+        self._update_elapsed_label()
         self.schedule_connection_check()
+
+    def _update_elapsed_label(self) -> None:
+        if self.elapsed_label is None:
+            return
+        if self.connected_at is None:
+            try:
+                self.elapsed_label.configure(text="")
+            except Exception:
+                pass
+            return
+        elapsed = int(time.time() - self.connected_at)
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        text = f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+        try:
+            self.elapsed_label.configure(text=text)
+        except Exception:
+            pass
 
     def schedule_flush(self) -> None:
         if self.flush_after_id is not None:
@@ -3526,6 +3653,10 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.start_process()
         self.schedule_flush()
         self.schedule_connection_check()
+
+    def duplicate_pane(self) -> None:
+        if self.owner_tab is not None:
+            self.owner_tab.add_console(self.profile)
         self.focus_terminal()
 
     def close_process_only(self) -> None:
@@ -3740,6 +3871,7 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         # callback here would fire it a second time on every focus event.
         terminal.activate_callback = self.set_active_terminal
         terminal.tab_broadcast_hook = self.broadcast_raw
+        terminal.owner_tab = self
 
         self.panes.append(terminal)
         self.apply_layout()
@@ -4068,6 +4200,160 @@ class ConsoleTab(ctk.CTkFrame if ctk is not None else ttk.Frame):
         self.panes.clear()
         self.active_terminal = None
 
+
+class TabStrip(ctk.CTkFrame if ctk is not None else ttk.Frame):
+    """Drop-in replacement for ttk.Notebook, implementing only the small slice of
+    its API this app actually calls (.tabs()/.tab()/.select()/.add()/.forget()) so
+    every existing call site - tab creation, close, rename, session capture/restore,
+    all of which only ever use that slice - keeps working completely unchanged.
+
+    Built because ttk.Notebook can't be themed to the IDE-style look this redesign
+    asks for (custom close button, active-tab accent) - Windows' ttk theme engine
+    doesn't expose that level of styling. A side benefit: a real close button
+    replaces the old coordinate-heuristic "was this click on the x" detection
+    (get_tab_close_candidate and the press/release tracking around it) entirely,
+    which is simpler and more reliable than what it replaces, not just a reskin.
+
+    tab ids are the Tk pathname string of the tab's ConsoleTab widget (str(widget)),
+    exactly like ttk.Notebook's tab ids - so self.nametowidget(tab_id), used
+    throughout the app to resolve a tab id back to its ConsoleTab, keeps working.
+    """
+
+    def __init__(self, parent: tk.Widget, app: "EmbeddedSSHLauncher"):
+        if ctk is not None:
+            super().__init__(parent, fg_color="transparent")
+        else:
+            super().__init__(parent)
+        self.app = app
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        self.tab_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10) if ctk is not None else ttk.Frame(self)
+        self.tab_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+
+        self.content_area = ctk.CTkFrame(self, fg_color="transparent") if ctk is not None else ttk.Frame(self)
+        self.content_area.grid(row=1, column=0, sticky="nsew")
+        self.content_area.grid_columnconfigure(0, weight=1)
+        self.content_area.grid_rowconfigure(0, weight=1)
+
+        self._tab_order: list[str] = []
+        self._tab_widgets: dict[str, tk.Widget] = {}
+        self._tab_titles: dict[str, str] = {}
+        self._tab_chips: dict[str, dict] = {}
+        self._selected: str | None = None
+
+    def add(self, widget: tk.Widget, text: str = "") -> None:
+        path = str(widget)
+        self._tab_order.append(path)
+        self._tab_widgets[path] = widget
+        self._tab_titles[path] = text
+        if ctk is not None:
+            self._build_chip(path)
+
+    def _build_chip(self, path: str) -> None:
+        chip = ctk.CTkFrame(self.tab_row, fg_color=CARD, corner_radius=8)
+        chip.pack(side="left", padx=(6, 0), pady=6)
+        chip.bind("<Button-1>", lambda _e, p=path: self.select(p))
+
+        display = self._display_title(path)
+        label = ctk.CTkLabel(
+            chip, text=display, text_color=TEXT, font=ctk.CTkFont(size=12), cursor="hand2",
+        )
+        label.pack(side="left", padx=(10, 4), pady=6)
+        label.bind("<Button-1>", lambda _e, p=path: self.select(p))
+        label.bind("<Double-Button-1>", lambda _e, p=path: self._on_double_click(p))
+
+        close_button = ctk.CTkButton(
+            chip, text="×", width=20, height=20, corner_radius=6,
+            fg_color="transparent", hover_color=DANGER, text_color=MUTED,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda p=path: self.app.close_tab_by_id(p),
+        )
+        close_button.pack(side="left", padx=(0, 8), pady=6)
+
+        self._tab_chips[path] = {"frame": chip, "label": label, "close": close_button}
+        self._restyle_chip(path)
+
+    def _display_title(self, path: str) -> str:
+        return self._tab_titles.get(path, "").replace(TAB_CLOSE_SUFFIX, "").replace("×", "").strip()
+
+    def _on_double_click(self, path: str) -> None:
+        self.select(path)
+        self.app.rename_current_tab()
+
+    def _restyle_chip(self, path: str) -> None:
+        chip = self._tab_chips.get(path)
+        if not chip:
+            return
+        active = path == self._selected
+        try:
+            chip["frame"].configure(fg_color=ACCENT if active else CARD)
+            chip["label"].configure(text_color=TEXT if active else MUTED)
+        except Exception:
+            pass
+
+    def tabs(self) -> tuple[str, ...]:
+        return tuple(self._tab_order)
+
+    def tab(self, tab_id: str, option: str | None = None, text: str | None = None):
+        if text is not None:
+            self._tab_titles[tab_id] = text
+            chip = self._tab_chips.get(tab_id)
+            if chip is not None:
+                try:
+                    chip["label"].configure(text=self._display_title(tab_id))
+                except Exception:
+                    pass
+            return None
+        return self._tab_titles.get(tab_id, "")
+
+    def select(self, tab_id: object = None):
+        if tab_id is None:
+            return self._selected or ""
+
+        path = tab_id if isinstance(tab_id, str) else str(tab_id)
+        if path not in self._tab_widgets:
+            return self._selected or ""
+
+        if path != self._selected:
+            if self._selected is not None:
+                old_widget = self._tab_widgets.get(self._selected)
+                if old_widget is not None:
+                    try:
+                        old_widget.grid_remove()
+                    except Exception:
+                        pass
+
+            self._selected = path
+            self._tab_widgets[path].grid(in_=self.content_area, row=0, column=0, sticky="nsew")
+
+            for p in self._tab_order:
+                self._restyle_chip(p)
+
+            self.app.on_tab_changed()
+
+        return path
+
+    def forget(self, tab_id: str) -> None:
+        if tab_id not in self._tab_widgets:
+            return
+
+        chip = self._tab_chips.pop(tab_id, None)
+        if chip is not None:
+            try:
+                chip["frame"].destroy()
+            except Exception:
+                pass
+
+        self._tab_widgets.pop(tab_id, None)
+        self._tab_titles.pop(tab_id, None)
+        if tab_id in self._tab_order:
+            self._tab_order.remove(tab_id)
+        if self._selected == tab_id:
+            self._selected = None
+
+
 class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
     def __init__(self) -> None:
         if ctk is not None:
@@ -4096,11 +4382,6 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.tab_counter = 0
         self.active_tab: ConsoleTab | None = None
         self.focused_terminal: EmbeddedTerminal | None = None
-
-        # Safe tab close tracking.
-        # This prevents tabs from closing when clicking/focusing/selecting terminal text.
-        self.pending_tab_close_id: str | None = None
-        self.pending_tab_close_press_xy: tuple[int, int] | None = None
 
         self.profile_buttons: list[ctk.CTkButton] = []
         self.command_buttons: list[ctk.CTkButton] = []
@@ -4147,25 +4428,6 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             pass
 
         style.configure(
-            "TNotebook",
-            background=BG,
-            borderwidth=0,
-            tabmargins=[4, 4, 4, 0],
-        )
-        style.configure(
-            "TNotebook.Tab",
-            background=PANEL_2,
-            foreground=TEXT,
-            padding=[14, 8],
-            borderwidth=0,
-            font=("Segoe UI", 10, "bold"),
-        )
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", ACCENT), ("active", CARD_HOVER)],
-            foreground=[("selected", "#ffffff"), ("active", "#ffffff")],
-        )
-        style.configure(
             "TPanedwindow",
             background=BG,
             borderwidth=0,
@@ -4189,13 +4451,26 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self.sidebar_width = UIState.load_sidebar_width()
         self._sash_drag_start_x: int | None = None
         self._sash_drag_start_width: int | None = None
+        self.current_dock = UIState.load_active_dock()
+        self.debug_console_visible = False
+        # Created here (before _build_topbar) so the top-bar Broadcast Typing switch
+        # and the Layouts-dock one can both bind to the same BooleanVar and stay in
+        # sync automatically - Tk variables support multiple bound widgets natively.
+        self.broadcast_var = tk.BooleanVar(value=False)
 
-        self.grid_columnconfigure(2, weight=1)
+        self.grid_columnconfigure(3, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
         self.topbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0) if ctk is not None else ttk.Frame(self)
-        self.topbar.grid(row=0, column=0, columnspan=3, sticky="ew")
+        self.topbar.grid(row=0, column=0, columnspan=4, sticky="ew")
         self.topbar.grid_columnconfigure(1, weight=1)
+
+        self.activity_bar = ctk.CTkFrame(
+            self, fg_color=PANEL_2, corner_radius=0, width=ACTIVITY_BAR_WIDTH,
+        ) if ctk is not None else ttk.Frame(self)
+        self.activity_bar.grid(row=1, column=0, sticky="ns")
+        if ctk is not None:
+            self.activity_bar.grid_propagate(False)
 
         self.sidebar = ctk.CTkScrollableFrame(
             self,
@@ -4204,7 +4479,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             width=self.sidebar_width,
         ) if ctk is not None else ttk.Frame(self)
 
-        self.sidebar.grid(row=1, column=0, sticky="nsw")
+        self.sidebar.grid(row=1, column=1, sticky="nsw")
 
         if ctk is not None:
             self.sidebar.configure(width=self.sidebar_width)
@@ -4213,7 +4488,7 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         if ctk is not None:
             self.sidebar_sash = ctk.CTkFrame(self, fg_color=CARD_HOVER, corner_radius=0, width=6)
-            self.sidebar_sash.grid(row=1, column=1, sticky="ns")
+            self.sidebar_sash.grid(row=1, column=2, sticky="ns")
             self.sidebar_sash.grid_propagate(False)
             try:
                 self.sidebar_sash.configure(cursor="sb_h_double_arrow")
@@ -4228,9 +4503,14 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             fg_color=BG,
             corner_radius=0,
         ) if ctk is not None else ttk.Frame(self)
-        self.main.grid(row=1, column=2, sticky="nsew")
+        self.main.grid(row=1, column=3, sticky="nsew")
         self.main.grid_columnconfigure(0, weight=1)
         self.main.grid_rowconfigure(1, weight=1)
+
+        self.debug_console_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0) if ctk is not None else ttk.Frame(self)
+        self.debug_console_row.grid(row=2, column=0, columnspan=4, sticky="ew")
+        self.debug_console_row.grid_columnconfigure(0, weight=1)
+        self.debug_console_row.grid_remove()
 
         self.statusbar = ctk.CTkFrame(
             self,
@@ -4238,12 +4518,15 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             corner_radius=0,
             height=32,
         ) if ctk is not None else ttk.Frame(self)
-        self.statusbar.grid(row=2, column=0, columnspan=3, sticky="ew")
+        self.statusbar.grid(row=3, column=0, columnspan=4, sticky="ew")
 
         self._build_topbar()
+        self._build_activity_bar()
         self._build_sidebar()
         self._build_main()
+        self._build_debug_console()
         self._build_statusbar()
+        self._switch_dock(self.current_dock)
 
     def on_sash_press(self, event: tk.Event) -> None:
         self._sash_drag_start_x = event.x_root
@@ -4288,40 +4571,157 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             self._toolbar_button(button_bar, "Reconnect", self.reconnect_active_console, WARNING).pack(side="left", padx=4)
             self._toolbar_button(button_bar, "Clear", self.clear_focused_console, CARD).pack(side="left", padx=4)
             self._toolbar_button(button_bar, "Close", self.close_active_console, DANGER).pack(side="left", padx=4)
+
+            info_row = ctk.CTkFrame(self.topbar, fg_color="transparent")
+            info_row.grid(row=1, column=0, columnspan=3, padx=18, pady=(0, 10), sticky="w")
+
+            self.active_profile_label = ctk.CTkLabel(
+                info_row, text="No active connection", text_color=MUTED, font=ctk.CTkFont(size=12),
+            )
+            self.active_profile_label.pack(side="left")
+
+            self.env_badge_label = ctk.CTkLabel(
+                info_row, text="", text_color=TEXT, font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=CARD, corner_radius=8,
+            )
+            self.env_badge_label.pack(side="left", padx=(8, 16))
+
+            ctk.CTkSwitch(
+                info_row, text="Broadcast Typing", variable=self.broadcast_var,
+                command=self.toggle_broadcast_typing, text_color=TEXT, font=ctk.CTkFont(size=11),
+            ).pack(side="left")
         else:
             ttk.Label(self.topbar, text="Embedded SSH Launcher").pack(side="left", padx=10)
 
     def _toolbar_button(self, parent: tk.Widget, text: str, command, color: str):
         return build_button(parent, text, command, color, width=92)
 
+    def _build_activity_bar(self) -> None:
+        """Narrow icon rail (VS Code-style) - each icon swaps which dock panel is
+        visible in self.sidebar (_switch_dock). Debug Logs opens the bottom console
+        instead of a side panel, since it's a log stream, not a settings/tool group.
+        """
+        if ctk is None:
+            return
+
+        self._activity_buttons: dict[str, "ctk.CTkButton"] = {}
+        specs = [
+            ("connections", "🖧", "Connections"),
+            ("layouts", "▦", "Layouts"),
+            ("commands", "⌘", "Quick Commands"),
+            ("monitoring", "📊", "Monitoring"),
+            ("settings", "⚙", "Settings"),
+        ]
+        for key, glyph, tooltip in specs:
+            button = ctk.CTkButton(
+                self.activity_bar,
+                text=glyph,
+                width=ACTIVITY_BAR_WIDTH - 12,
+                height=44,
+                corner_radius=10,
+                fg_color="transparent",
+                hover_color=CARD_HOVER,
+                text_color=TEXT,
+                font=ctk.CTkFont(size=18),
+                command=lambda k=key: self._switch_dock(k),
+            )
+            button.pack(padx=6, pady=(10 if key == "connections" else 4, 4))
+            self._activity_buttons[key] = button
+
+        debug_button = ctk.CTkButton(
+            self.activity_bar,
+            text="🐞",
+            width=ACTIVITY_BAR_WIDTH - 12,
+            height=44,
+            corner_radius=10,
+            fg_color="transparent",
+            hover_color=CARD_HOVER,
+            text_color=TEXT,
+            font=ctk.CTkFont(size=18),
+            command=self.toggle_debug_console,
+        )
+        debug_button.pack(side="bottom", padx=6, pady=10)
+        self._activity_buttons["debug"] = debug_button
+
+    def _switch_dock(self, key: str) -> None:
+        if key not in DOCK_SECTIONS:
+            key = DEFAULT_ACTIVE_DOCK
+
+        self.current_dock = key
+        for name, frame in self.dock_frames.items():
+            if name == key:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+
+        if ctk is not None:
+            for name, button in self._activity_buttons.items():
+                if name == "debug":
+                    continue
+                button.configure(fg_color=ACCENT if name == key else "transparent")
+
+        UIState.save_active_dock(key)
+
     def _build_sidebar(self) -> None:
-        self._sidebar_title("Recent")
+        """Builds the 5 Activity Bar dock panels as children of self.sidebar.
+
+        Only one of self.dock_frames is packed/visible at a time (_switch_dock).
+        Every button/callback below is unchanged from the pre-redesign sidebar -
+        only which dock frame each section is parented into is new.
+        """
+        self.dock_frames: dict[str, "ctk.CTkFrame"] = {}
+        for key in DOCK_SECTIONS:
+            frame = ctk.CTkFrame(self.sidebar, fg_color="transparent") if ctk is not None else ttk.Frame(self.sidebar)
+            self.dock_frames[key] = frame
+
+        dock_connections = self.dock_frames["connections"]
+        dock_layouts = self.dock_frames["layouts"]
+        dock_commands = self.dock_frames["commands"]
+        dock_monitoring = self.dock_frames["monitoring"]
+        dock_settings = self.dock_frames["settings"]
+
+        self._sidebar_title(dock_connections, "Recent")
 
         self.recent_buttons_frame = ctk.CTkFrame(
-            self.sidebar,
+            dock_connections,
             fg_color="transparent",
-        ) if ctk is not None else ttk.Frame(self.sidebar)
+        ) if ctk is not None else ttk.Frame(dock_connections)
         self.recent_buttons_frame.pack(fill="x", padx=12, pady=(6, 12))
 
-        self._sidebar_title("Profiles")
+        self._sidebar_title(dock_connections, "Profiles")
+
+        self.profile_search_var = tk.StringVar()
+        if ctk is not None:
+            profile_search = ctk.CTkEntry(
+                dock_connections,
+                textvariable=self.profile_search_var,
+                placeholder_text="Search profiles...",
+                fg_color=PANEL,
+                border_color=CARD_HOVER,
+                text_color=TEXT,
+                height=30,
+                corner_radius=8,
+            )
+            profile_search.pack(fill="x", padx=12, pady=(0, 6))
+            profile_search.bind("<KeyRelease>", lambda _e: self.refresh_profiles())
 
         self.profile_buttons_frame = ctk.CTkFrame(
-            self.sidebar,
+            dock_connections,
             fg_color="transparent",
-        ) if ctk is not None else ttk.Frame(self.sidebar)
+        ) if ctk is not None else ttk.Frame(dock_connections)
         self.profile_buttons_frame.pack(fill="x", padx=12, pady=(6, 6))
 
         # Outside profile_buttons_frame on purpose - that frame's children are
         # destroyed and rebuilt on every refresh_profiles() call.
-        self._side_button(self.sidebar, "Import from SSH Config", self.import_from_ssh_config, CARD_HOVER)
+        self._side_button(dock_connections, "Import from SSH Config", self.import_from_ssh_config, CARD_HOVER)
 
-        self._sidebar_title("Connection")
+        self._sidebar_title(dock_connections, "Connection")
 
         self.profile_form = ctk.CTkFrame(
-            self.sidebar,
+            dock_connections,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Connection")
+        ) if ctk is not None else ttk.LabelFrame(dock_connections, text="Connection")
         self.profile_form.pack(fill="x", padx=12, pady=(0, 14))
 
         self.name_var = tk.StringVar()
@@ -4429,13 +4829,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             ttk.Button(self.profile_form, text="New", command=self.clear_form).pack(fill="x")
             ttk.Button(self.profile_form, text="Delete", command=self.delete_profile).pack(fill="x")
 
-        self._sidebar_title("Open Console")
+        self._sidebar_title(dock_connections, "Open Console")
 
         self.open_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_connections,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Open Console")
+        ) if ctk is not None else ttk.LabelFrame(dock_connections, text="Open Console")
         self.open_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self._side_button(self.open_panel, "New Tab", self.open_new_tab, ACCENT)
@@ -4445,20 +4845,20 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.open_panel, "Open 4 Split", lambda: self.open_n_split(4), CARD_HOVER)
         self._side_button(self.open_panel, "File Transfer...", self.open_file_transfer_window, CARD_HOVER)
 
-        self._sidebar_title("Layout / Session")
+        self._sidebar_title(dock_layouts, "Layout / Session")
 
         self.session_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_layouts,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Layout / Session")
+        ) if ctk is not None else ttk.LabelFrame(dock_layouts, text="Layout / Session")
         self.session_panel.pack(fill="x", padx=12, pady=(0, 14))
 
-        self._side_button(self.session_panel, "2 Panes: Side by Side", lambda: self.set_active_layout_mode("horizontal"), CARD_HOVER)
-        self._side_button(self.session_panel, "2 Panes: Stacked", lambda: self.set_active_layout_mode("vertical"), CARD_HOVER)
-        self._side_button(self.session_panel, "3 Panes: 2 Top / 1 Bottom", lambda: self.set_active_layout_mode("grid3_top"), CARD_HOVER)
-        self._side_button(self.session_panel, "3 Panes: 1 Top / 2 Bottom", lambda: self.set_active_layout_mode("grid3_bottom"), CARD_HOVER)
-        self._side_button(self.session_panel, "4 Panes: 2 x 2 Grid", lambda: self.set_active_layout_mode("grid4"), CARD_HOVER)
+        self._layout_button(self.session_panel, "2 Panes: Side by Side", "horizontal", [(0, 0, 0.5, 1), (0.5, 0, 0.5, 1)])
+        self._layout_button(self.session_panel, "2 Panes: Stacked", "vertical", [(0, 0, 1, 0.5), (0, 0.5, 1, 0.5)])
+        self._layout_button(self.session_panel, "3 Panes: 2 Top / 1 Bottom", "grid3_top", [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.5, 1, 0.5)])
+        self._layout_button(self.session_panel, "3 Panes: 1 Top / 2 Bottom", "grid3_bottom", [(0, 0, 1, 0.5), (0, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)])
+        self._layout_button(self.session_panel, "4 Panes: 2 x 2 Grid", "grid4", [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)])
         self._side_button(self.session_panel, "Auto Layout", lambda: self.set_active_layout_mode("auto"), CARD_HOVER)
         self._side_button(self.session_panel, "Rename Current Tab", self.rename_current_tab, CARD_HOVER)
         self._side_button(self.session_panel, "Reconnect Selected Console", self.reconnect_active_console, WARNING)
@@ -4466,20 +4866,19 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.session_panel, "Close Selected Console", self.close_active_console, DANGER)
         self._side_button(self.session_panel, "Close Current Tab", self.close_current_tab, DANGER)
 
-        self.broadcast_var = tk.BooleanVar(value=False)
         if ctk is not None:
             ctk.CTkSwitch(
                 self.session_panel, text="Broadcast Typing (this tab)", variable=self.broadcast_var,
                 command=self.toggle_broadcast_typing, text_color=TEXT,
             ).pack(anchor="w", padx=10, pady=(8, 10))
 
-        self._sidebar_title("Quick Commands")
+        self._sidebar_title(dock_commands, "Quick Commands")
 
         self.commands_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_commands,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Quick Commands")
+        ) if ctk is not None else ttk.LabelFrame(dock_commands, text="Quick Commands")
         self.commands_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self.command_buttons_frame = ctk.CTkFrame(
@@ -4530,13 +4929,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             ttk.Button(self.commands_panel, text="Delete", command=self.delete_command).pack(fill="x")
 
 
-        self._sidebar_title("Monitoring")
+        self._sidebar_title(dock_monitoring, "Monitoring")
 
         self.monitoring_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_monitoring,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Monitoring")
+        ) if ctk is not None else ttk.LabelFrame(dock_monitoring, text="Monitoring")
         self.monitoring_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self._side_button(self.monitoring_panel, "Open Dashboard", self.open_monitoring_dashboard, ACCENT)
@@ -4548,24 +4947,24 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.monitoring_panel, "Recent Errors", self.run_recent_errors_check, CARD_HOVER)
         self._side_button(self.monitoring_panel, "Web2py Processes", self.run_web2py_process_check, CARD_HOVER)
 
-        self._sidebar_title("Security")
+        self._sidebar_title(dock_monitoring, "Security")
 
         self.security_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_monitoring,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Security")
+        ) if ctk is not None else ttk.LabelFrame(dock_monitoring, text="Security")
         self.security_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self._side_button(self.security_panel, "Connection Audit Log", self.open_audit_log, CARD_HOVER)
 
-        self._sidebar_title("Documentation")
+        self._sidebar_title(dock_settings, "Documentation")
 
         self.docs_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_settings,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Documentation")
+        ) if ctk is not None else ttk.LabelFrame(dock_settings, text="Documentation")
         self.docs_panel.pack(fill="x", padx=12, pady=(0, 14))
 
         self._side_button(self.docs_panel, "Open Documentation", self.open_documentation, ACCENT)
@@ -4573,29 +4972,29 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         self._side_button(self.docs_panel, "Version History", lambda: self.open_documentation(DOC_VERSION_FILE), CARD_HOVER)
         self._side_button(self.docs_panel, "Features Plan", lambda: self.open_documentation(DOC_FEATURES_FILE), CARD_HOVER)
 
-        self._sidebar_title("Tools")
+        self._sidebar_title(dock_settings, "Tools")
 
         self.tools_panel = ctk.CTkFrame(
-            self.sidebar,
+            dock_settings,
             fg_color=CARD,
             corner_radius=14,
-        ) if ctk is not None else ttk.LabelFrame(self.sidebar, text="Tools")
+        ) if ctk is not None else ttk.LabelFrame(dock_settings, text="Tools")
         self.tools_panel.pack(fill="x", padx=12, pady=(0, 20))
 
         self._side_button(self.tools_panel, "Check Requirements", self.check_requirements, CARD_HOVER)
         self._side_button(self.tools_panel, "Open Config Folder", self.open_config_folder, CARD_HOVER)
-        self._side_button(self.tools_panel, "Debug Log Viewer", self.open_debug_log_viewer, CARD_HOVER)
+        self._side_button(self.tools_panel, "Debug Console", self.toggle_debug_console, CARD_HOVER)
 
-    def _sidebar_title(self, text: str) -> None:
+    def _sidebar_title(self, parent: tk.Widget, text: str) -> None:
         if ctk is not None:
             ctk.CTkLabel(
-                self.sidebar,
+                parent,
                 text=text,
                 text_color=TEXT,
                 font=ctk.CTkFont(size=15, weight="bold"),
             ).pack(anchor="w", padx=14, pady=(12, 2))
         else:
-            ttk.Label(self.sidebar, text=text).pack(anchor="w")
+            ttk.Label(parent, text=text).pack(anchor="w")
 
     def _form_row(
         self,
@@ -4636,6 +5035,32 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         else:
             ttk.Button(parent, text=text, command=command).pack(fill="x")
 
+    def _layout_button(
+        self, parent: tk.Widget, text: str, layout_key: str, rects: list[tuple[float, float, float, float]],
+    ) -> None:
+        """A Layout/Session button with a small canvas diagram (normalized 0-1 pane
+        rects) beside it, so the arrangement is visible at a glance instead of only
+        readable from the label text.
+        """
+        if ctk is None:
+            ttk.Button(parent, text=text, command=lambda: self.set_active_layout_mode(layout_key)).pack(fill="x")
+            return
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=4)
+
+        canvas = tk.Canvas(row, width=32, height=24, bg=CARD, highlightthickness=0, bd=0)
+        canvas.pack(side="left", padx=(0, 8))
+        for x, y, w, h in rects:
+            canvas.create_rectangle(
+                2 + x * 28, 2 + y * 20, 2 + (x + w) * 28, 2 + (y + h) * 20,
+                fill=ACCENT, outline=PANEL,
+            )
+
+        build_button(
+            row, text, lambda: self.set_active_layout_mode(layout_key), CARD_HOVER, anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
     def _build_main(self) -> None:
         hint_panel = ctk.CTkFrame(
             self.main,
@@ -4658,15 +5083,8 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 text="Double-click a profile to open SSH. Click a quick command to run it in the focused console. Click × on a tab to close it.",
             ).grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
-        self.notebook = ttk.Notebook(self.main)
+        self.notebook = TabStrip(self.main, self)
         self.notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
-        self.notebook.bind("<Double-Button-1>", self.on_notebook_double_click)
-
-        # Safer X-close handling.
-        # We track press and release so a random release/focus click cannot close a tab.
-        self.notebook.bind("<ButtonPress-1>", self.on_notebook_button_press)
-        self.notebook.bind("<ButtonRelease-1>", self.on_notebook_button_release)
 
     def _build_statusbar(self) -> None:
         self.status_var = tk.StringVar(value="Ready")
@@ -4678,8 +5096,56 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
                 text_color=MUTED,
                 font=ctk.CTkFont(size=12),
             ).pack(side="left", padx=14, pady=6)
+
+            self.connection_count_var = tk.StringVar(value="0 connections")
+            ctk.CTkLabel(
+                self.statusbar,
+                textvariable=self.connection_count_var,
+                text_color=MUTED,
+                font=ctk.CTkFont(size=12),
+            ).pack(side="right", padx=(4, 14), pady=6)
+
+            build_button(
+                self.statusbar, "Debug Console", self.toggle_debug_console, CARD_HOVER, width=110, height=24,
+            ).pack(side="right", padx=4, pady=4)
+
+            self._schedule_connection_count_refresh()
         else:
             ttk.Label(self.statusbar, textvariable=self.status_var).pack(side="left", padx=10)
+
+    def _schedule_connection_count_refresh(self) -> None:
+        self.update_connection_count()
+        self.update_active_profile_display()
+        self.after(1000, self._schedule_connection_count_refresh)
+
+    def update_active_profile_display(self) -> None:
+        if not hasattr(self, "active_profile_label"):
+            return
+        terminal = self.focused_terminal
+        if terminal is None:
+            self.active_profile_label.configure(text="No active connection")
+            self.env_badge_label.configure(text="", fg_color=CARD)
+            return
+        profile = terminal.profile
+        self.active_profile_label.configure(text=f"{profile.name}  {profile.user}@{profile.host}:{profile.port}")
+        label, color = ENV_TAGS.get(profile.env_color, ENV_TAGS[""])
+        if profile.env_color:
+            self.env_badge_label.configure(text=label.upper(), fg_color=color)
+        else:
+            self.env_badge_label.configure(text="", fg_color=CARD)
+
+    def update_connection_count(self) -> None:
+        if not hasattr(self, "notebook") or not hasattr(self, "connection_count_var"):
+            return
+        try:
+            total = 0
+            for tab_id in self.notebook.tabs():
+                widget = self.nametowidget(tab_id)
+                if isinstance(widget, ConsoleTab):
+                    total += sum(1 for pane in widget.panes if pane.alive)
+            self.connection_count_var.set(f"{total} connection{'s' if total != 1 else ''}")
+        except Exception:
+            pass
 
     def tab_text(self, title: str) -> str:
         clean = title.replace("×", "").strip()
@@ -4695,7 +5161,12 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
 
         self.profile_buttons = []
 
+        query = self.profile_search_var.get().strip().lower() if hasattr(self, "profile_search_var") else ""
+
         for index, profile in enumerate(self.profiles):
+            if query and query not in profile.name.lower() and query not in profile.host.lower():
+                continue
+
             label = f"{profile.name}\n{profile.user}@{profile.host}:{profile.port}"
             _env_label, env_border = ENV_TAGS.get(profile.env_color, ENV_TAGS[""])
 
@@ -4836,35 +5307,60 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
             button.configure(border_width=3 if selected else 0, border_color=TEXT)
 
     def refresh_commands(self) -> None:
+        """Renders Quick Commands as a chip grid grouped by category (v1.6.0 redesign).
+
+        self.command_buttons stays index-aligned with self.commands (select_command/
+        run_command_by_index both index into it directly) regardless of the visual
+        category grouping below - built by assignment into a pre-sized list, not by
+        append order.
+        """
         for widget in self.command_buttons_frame.winfo_children():
             widget.destroy()
 
-        self.command_buttons = []
+        if ctk is None:
+            self.command_buttons = []
+            for index, command in enumerate(self.commands):
+                button = ttk.Button(
+                    self.command_buttons_frame, text=command.name,
+                    command=lambda i=index: self.run_command_by_index(i),
+                )
+                button.pack(fill="x")
+                self.command_buttons.append(button)
+            return
 
+        self.command_buttons: list[object | None] = [None] * len(self.commands)
+
+        categories: dict[str, list[int]] = {}
         for index, command in enumerate(self.commands):
-            if ctk is not None:
+            categories.setdefault(command.category or "General", []).append(index)
+
+        chip_columns = 2
+        for category in sorted(categories.keys()):
+            ctk.CTkLabel(
+                self.command_buttons_frame, text=category, text_color=MUTED,
+                font=ctk.CTkFont(size=11, weight="bold"),
+            ).pack(anchor="w", padx=2, pady=(8, 2))
+
+            chip_grid = ctk.CTkFrame(self.command_buttons_frame, fg_color="transparent")
+            chip_grid.pack(fill="x")
+            for col in range(chip_columns):
+                chip_grid.grid_columnconfigure(col, weight=1)
+
+            for position, index in enumerate(categories[category]):
+                command = self.commands[index]
                 button = ctk.CTkButton(
-                    self.command_buttons_frame,
+                    chip_grid,
                     text=command.name,
                     command=lambda i=index: self.run_command_by_index(i),
                     fg_color=ACCENT if command.name.lower() == "clear" else CARD_HOVER,
                     hover_color=ACCENT_HOVER,
                     text_color=TEXT,
-                    anchor="w",
-                    height=34,
-                    corner_radius=10,
+                    height=30,
+                    corner_radius=15,
                 )
-                button.pack(fill="x", pady=4)
+                button.grid(row=position // chip_columns, column=position % chip_columns, sticky="ew", padx=3, pady=3)
                 button.bind("<Button-3>", lambda _event, i=index: self.select_command(i))
-                self.command_buttons.append(button)
-            else:
-                button = ttk.Button(
-                    self.command_buttons_frame,
-                    text=command.name,
-                    command=lambda i=index: self.run_command_by_index(i),
-                )
-                button.pack(fill="x")
-                self.command_buttons.append(button)
+                self.command_buttons[index] = button
 
     def select_command(self, index: int) -> None:
         if index < 0 or index >= len(self.commands):
@@ -5133,7 +5629,10 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         if not command:
             return
 
-        self.commands.append(QuickCommand(name=name, command=command))
+        category = ask_text(self, APP_NAME, "Category (e.g. System, Web2py, Logs - blank = General):")
+        category = (category or "").strip()
+
+        self.commands.append(QuickCommand(name=name, command=command, category=category))
         CommandStore.save(self.commands)
         self.refresh_commands()
         self.status_var.set(f"Added command: {name}")
@@ -5176,7 +5675,13 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         if not command:
             return
 
-        self.commands[old_index] = QuickCommand(name=name, command=command)
+        category = ask_text(
+            self, APP_NAME, "Category (e.g. System, Web2py, Logs - blank = General):",
+            initial_value=selected.category,
+        )
+        category = (category or "").strip()
+
+        self.commands[old_index] = QuickCommand(name=name, command=command, category=category)
         CommandStore.save(self.commands)
         self.refresh_commands()
         self.select_command(old_index)
@@ -5481,9 +5986,6 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         except Exception:
             pass
 
-        self.pending_tab_close_id = None
-        self.pending_tab_close_press_xy = None
-
         remaining_tabs = list(self.notebook.tabs())
 
         if remaining_tabs:
@@ -5536,122 +6038,11 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         state = "enabled" if tab.broadcast_enabled else "disabled"
         self.status_var.set(f"Broadcast typing {state} for this tab")
 
-    def on_notebook_double_click(self, event: tk.Event) -> None:
-        # A double-click on/near the x close zone must never trigger a rename.
-        # Without this guard, the first click's deferred close (see
-        # on_notebook_button_release) can close a tab 1ms later, shifting
-        # later tabs left, and the second click of the same double-click then
-        # resolves against whatever tab slid into that position - opening the
-        # rename dialog on the wrong tab.
-        if self.get_tab_close_candidate(event) is not None:
-            return
-
-        try:
-            clicked_tab = self.notebook.index(f"@{event.x},{event.y}")
-        except Exception:
-            return
-
-        self.notebook.select(clicked_tab)
-        self.rename_current_tab()
-
-    def get_tab_close_candidate(self, event: tk.Event) -> str | None:
-        """
-        Return a tab id only if the event is clearly on the X area of a tab.
-
-        This is intentionally strict to prevent accidental closes when:
-        - focusing a terminal
-        - selecting terminal text
-        - clicking a tab label
-        - dragging the mouse
-        """
-
-        # Only accept events that really belong to the notebook widget.
-        if event.widget is not self.notebook:
-            return None
-
-        try:
-            clicked_tab_index = self.notebook.index(f"@{event.x},{event.y}")
-        except Exception:
-            return None
-
-        tabs = self.notebook.tabs()
-
-        if clicked_tab_index < 0 or clicked_tab_index >= len(tabs):
-            return None
-
-        tab_id = tabs[clicked_tab_index]
-
-        try:
-            bbox = self.notebook.bbox(clicked_tab_index)
-        except Exception:
-            return None
-
-        if not bbox:
-            return None
-
-        tab_x, tab_y, tab_width, tab_height = bbox
-
-        # Must be vertically inside the real tab area.
-        if event.y < tab_y or event.y > tab_y + tab_height:
-            return None
-
-        # Smaller close zone than before.
-        # Old value was 24 px and was too easy to trigger accidentally.
-        close_zone_width = 12
-        close_zone_left = tab_x + tab_width - close_zone_width
-
-        if event.x < close_zone_left or event.x > tab_x + tab_width:
-            return None
-
-        title = self.notebook.tab(tab_id, "text")
-
-        if "×" not in title:
-            return None
-
-        return tab_id
-
-    def on_notebook_button_press(self, event: tk.Event) -> None:
-        self.pending_tab_close_id = self.get_tab_close_candidate(event)
-
-        if self.pending_tab_close_id is not None:
-            self.pending_tab_close_press_xy = (event.x, event.y)
-        else:
-            self.pending_tab_close_press_xy = None
-
-    def on_notebook_button_release(self, event: tk.Event) -> None:
-        tab_to_close = self.pending_tab_close_id
-
-        if tab_to_close is None:
-            return
-
-        try:
-            if tab_to_close not in self.notebook.tabs():
-                self.pending_tab_close_id = None
-                self.pending_tab_close_press_xy = None
-                return
-        except Exception:
-            self.pending_tab_close_id = None
-            self.pending_tab_close_press_xy = None
-            return
-
-        if self.pending_tab_close_press_xy is None:
-            self.pending_tab_close_id = None
-            return
-
-        press_x, press_y = self.pending_tab_close_press_xy
-
-        if abs(event.x - press_x) > 4 or abs(event.y - press_y) > 4:
-            self.pending_tab_close_id = None
-            self.pending_tab_close_press_xy = None
-            return
-
-        release_candidate = self.get_tab_close_candidate(event)
-
-        self.pending_tab_close_id = None
-        self.pending_tab_close_press_xy = None
-
-        if release_candidate == tab_to_close:
-            self.after(1, lambda tab_id=tab_to_close: self.close_tab_by_id(tab_id))
+    # Tab close/rename used to be handled here via coordinate-heuristic click
+    # detection (get_tab_close_candidate and press/release tracking around it),
+    # because ttk.Notebook has no real close button. TabStrip has one (and a
+    # direct double-click binding on each tab's label for rename), so all of
+    # that heuristic code is gone rather than kept alongside the new UI.
 
 
     def open_monitoring_dashboard(self) -> None:
@@ -5690,12 +6081,16 @@ class EmbeddedSSHLauncher(ctk.CTk if ctk is not None else tk.Tk):
         except Exception as exc:
             show_message(self, "error", APP_NAME, f"Could not open audit log.\n\n{exc}")
 
-    def open_debug_log_viewer(self) -> None:
-        try:
-            DebugLogViewer(self)
-            self.status_var.set("Opened debug log viewer")
-        except Exception as exc:
-            show_message(self, "error", APP_NAME, f"Could not open debug log viewer.\n\n{exc}")
+    def _build_debug_console(self) -> None:
+        self.debug_console = DebugLogViewer(self.debug_console_row, self)
+        self.debug_console.pack(fill="both", expand=True)
+
+    def toggle_debug_console(self) -> None:
+        self.debug_console_visible = not self.debug_console_visible
+        if self.debug_console_visible:
+            self.debug_console_row.grid()
+        else:
+            self.debug_console_row.grid_remove()
 
     def get_monitoring_profile(self) -> SSHProfile | None:
         if self.focused_terminal is not None:
@@ -5970,5 +6365,21 @@ if __name__ == "__main__":
         root.destroy()
         sys.exit(1)
 
-    app = EmbeddedSSHLauncher()
-    app.mainloop()
+    try:
+        app = EmbeddedSSHLauncher()
+        app.mainloop()
+    except Exception as exc:
+        # Last-resort catch-all: report_callback_exception only covers exceptions
+        # raised inside Tkinter callbacks/after() jobs, not construction itself or
+        # anything that somehow still escapes it. Without this, a startup-time
+        # failure in the --windowed build would show a bare Windows crash dialog
+        # with no log trail at all - log it, then show one dark-themed dialog.
+        APP_LOGGER.error("Fatal startup/mainloop exception:\n" + "".join(traceback.format_exception(exc)))
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(APP_NAME, f"A fatal error occurred and the app must close.\n\n{exc}")
+            root.destroy()
+        except Exception:
+            pass
+        sys.exit(1)
