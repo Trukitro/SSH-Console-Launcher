@@ -162,7 +162,7 @@ def _install_stdio_tee() -> None:
 _install_stdio_tee()
 
 
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
@@ -456,6 +456,53 @@ def resolve_health_command(profile: "SSHProfile | None") -> str:
     if profile is not None and profile.health_check_command.strip():
         return profile.health_check_command
     return MONITORING_HEALTH_COMMAND
+
+
+def query_recent_crash_details(process_names: tuple[str, ...], within_seconds: int = 20) -> str | None:
+    """Look up the most recent Windows "Application Error" event (Event ID 1000,
+    log "Application") for any of process_names within the last within_seconds.
+
+    This is exactly how the conhost.exe/ucrtbase.dll crash behind a "plink.exe -
+    Application Error" dialog was originally diagnosed (see VERSION_HISTORY v1.5.6) -
+    a native process crash (conhost.exe, which ConPTY uses to host the interactive
+    plink.exe session) never raises a Python exception, so it's otherwise invisible
+    to this app's own logging. Runs `Get-WinEvent` via PowerShell rather than a
+    Python event-log binding to avoid a new dependency; meant to be called from a
+    background thread since it takes ~1-2s.
+    """
+    try:
+        ps_script = (
+            "$e = Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; "
+            f"StartTime=(Get-Date).AddSeconds(-{within_seconds})}}"
+            " -ErrorAction SilentlyContinue | Select-Object -First 1; if ($e) { $e.Message }"
+        )
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True, text=True, timeout=10, shell=False,
+        )
+        output = (result.stdout or "").strip()
+        if not output:
+            return None
+        if not any(name.lower() in output.lower() for name in process_names):
+            return None
+        return output
+    except Exception:
+        return None
+
+
+def log_crash_details_async(context: str) -> None:
+    """Fire-and-forget: check the Windows Application event log for a recent
+    conhost.exe/plink.exe crash and log full details if one is found, from a
+    background thread so the UI thread never blocks on the ~1-2s PowerShell call.
+    """
+    def worker() -> None:
+        details = query_recent_crash_details(("conhost.exe", "plink.exe"))
+        if details:
+            APP_LOGGER.error(f"{context}: found a matching Windows crash event:\n{details}")
+        else:
+            APP_LOGGER.warning(f"{context}: no matching conhost.exe/plink.exe crash event found in the last 20s")
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 CONNECTED = "#22c55e"
@@ -2541,8 +2588,21 @@ class DebugLogViewer(ctk.CTkToplevel if ctk is not None else tk.Toplevel):
         self._poll_after_id: str | None = None
 
         self._build_ui()
+        self._drain_stale_queue()
         self._load_history()
         self._schedule_poll()
+
+    def _drain_stale_queue(self) -> None:
+        """LOG_QUEUE accumulates from app startup and nothing consumes it until a
+        viewer is open. _load_history() already renders everything from LOG_BUFFER,
+        so any backlog sitting in LOG_QUEUE at open time would otherwise get
+        rendered a second time by the first _poll_log_queue() call.
+        """
+        while True:
+            try:
+                LOG_QUEUE.get_nowait()
+            except queue.Empty:
+                break
 
     def _build_ui(self) -> None:
         if ctk is None:
@@ -3092,8 +3152,14 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         if not self.alive:
             return
 
+        # No explicit `stty rows/columns` here on purpose: PtyProcess.spawn(dimensions=...)
+        # already sets the size at pty creation, which plink/-t relays to the remote via
+        # SSH's pty-req, so the shell already sees the right size. A resize command sent
+        # immediately before `clear` (which erases scrollback) matches the trigger pattern
+        # of a known conhost.exe/ConPTY crash (stack buffer overrun in ucrtbase.dll -
+        # microsoft/terminal#14759) closely enough to be worth avoiding, since that's
+        # exactly the shape of the crash reported against this app in v1.5.6/v1.5.7.
         self.send("export TERM=xterm\r")
-        self.send(f"stty rows {self.term_rows} columns {self.term_columns}\r")
         self.send("stty erase ^?\r")
         self.send("clear\r")
 
@@ -3112,6 +3178,7 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
             except Exception as exc:
                 if self.alive and epoch == self.session_epoch:
                     APP_LOGGER.warning(f"Reader thread for {self.profile.name} ended: {exc}")
+                    log_crash_details_async(f"Reader thread for {self.profile.name} ended unexpectedly")
                     self.output_queue.put((epoch, ("STATUS", "disconnected", "Disconnected")))
                     self.output_queue.put((epoch, "\n[session closed]\n"))
                     self.alive = False
@@ -3140,6 +3207,8 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         try:
             if hasattr(self.proc, "isalive") and not self.proc.isalive():
                 self.alive = False
+                APP_LOGGER.warning(f"Connection watchdog for {self.profile.name}: underlying process is no longer alive")
+                log_crash_details_async(f"Connection watchdog for {self.profile.name}: process died unexpectedly")
                 self.set_connection_state("disconnected", "Disconnected")
                 return
         except Exception:

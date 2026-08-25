@@ -513,10 +513,27 @@ This is the first iteration of a larger UI modernization effort (IDE-style layou
 
 ---
 
+## v1.5.8 - Crash Diagnostics & a ConPTY Crash Trigger Fix
+
+### Fixed
+
+- **Debug Log Viewer duplicated every entry on open**: the viewer seeded its history from `LOG_BUFFER` but never drained the still-backlogged `LOG_QUEUE`, so the first live-poll tick re-rendered everything already shown. `LOG_QUEUE` is now drained (discarded, since `LOG_BUFFER` already has that data) before history is loaded.
+- **Possible ConPTY crash trigger removed**: `initialize_remote_terminal()` sent an explicit `stty rows/columns` resize command immediately before `clear` on every connect and reconnect. Research into the reported `conhost.exe`/`ucrtbase.dll` stack-buffer-overrun crash (v1.5.6) turned up a documented Windows/ConPTY bug with the same shape - a resize immediately adjacent to a scrollback-clearing `clear` (microsoft/terminal#14759). The `stty rows/columns` call was redundant anyway (`PtyProcess.spawn(dimensions=...)` already sets the size at pty creation, which plink's `-t` relays to the remote via SSH's pty-req), so it's removed rather than reordered.
+
+### Added
+
+- **Automatic crash-detail lookup**: when the app detects a session died unexpectedly (either the reader thread's read() failing, or the 2-second connection watchdog finding the underlying process no longer alive), it now automatically queries the Windows Application event log (`Get-WinEvent`, matching Event ID 1000 "Application Error" for `conhost.exe`/`plink.exe` in the last 20 seconds) from a background thread and logs the full crash record - faulting module, exception code, timestamp - directly into the Debug Log Viewer. No more manually digging through Event Viewer to see what actually crashed.
+
+### Notes
+
+**Honesty note**: the `conhost.exe` crash itself could not be reproduced locally despite real effort - a live `htop` session and five repeated attempts at the exact old resize-then-clear sequence, both run directly against a real saved profile/server, all completed cleanly with no crash. The `stty` removal is a well-reasoned mitigation backed by a documented, matching Windows bug report, not a confirmed fix - if the crash recurs on v1.5.8, the new automatic crash-detail lookup should make the next diagnosis pass much faster.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.7
+v1.5.8
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 # SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.7  
+**Current stable version:** v1.5.8  
 **Planning document created for:** local Git/project tracking
 
 This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
@@ -36,6 +36,7 @@ The app currently supports:
 - Critical alerts (popup + beep), per-profile custom health-check command
 - Clipboard auto-clear for copied passwords, connection audit log
 - Debug Log Viewer with SSH connection lifecycle logging (v1.5.7)
+- Automatic Windows crash-detail lookup, ConPTY crash trigger mitigation (v1.5.8)
 
 ---
 
@@ -267,6 +268,24 @@ This is Phase 1 of a larger UI modernization request (full IDE-style redesign, c
 
 ---
 
+## v1.5.8 - Crash Diagnostics & a ConPTY Crash Trigger Fix ✅ Implemented
+
+### Goal
+
+Continue the v1.5.6/v1.5.7 crash investigation with real diagnostic data, using a real saved profile/server to try to reproduce it directly.
+
+### Implemented
+
+- Fixed the Debug Log Viewer duplicating every entry on open (stale `LOG_QUEUE` backlog re-rendered on top of the `LOG_BUFFER` history seed).
+- Removed a redundant `stty rows/columns` resize call sent immediately before `clear` on every connect/reconnect - matches the trigger shape of a documented Windows/ConPTY bug (microsoft/terminal#14759, a `conhost.exe` stack-buffer-overrun crash from a resize adjacent to a scrollback-clearing operation) closely enough to be worth removing; the call was redundant regardless since the pty's dimensions are already set at creation.
+- Automatic Windows Application event log crash-detail lookup: when a session dies unexpectedly, the app now queries `Get-WinEvent` for a matching `conhost.exe`/`plink.exe` crash record and logs the full detail (faulting module, exception code) into the Debug Log Viewer automatically.
+
+### Notes
+
+Could not reproduce the `conhost.exe` crash locally despite direct testing against a real saved profile and server (one `htop` session, five repeats of the exact old resize-then-clear sequence). The `stty` removal is a well-reasoned mitigation, not a confirmed fix - the new crash-detail lookup is there so the next occurrence (if any) is diagnosed automatically instead of requiring manual Event Viewer digging.
+
+---
+
 ## Phase 2 (proposed, not yet scoped into a version) - UI/UX Modernization
 
 ### Goal
@@ -319,7 +338,7 @@ This is a larger architecture change and should be considered after the current 
 
 # Priority Recommendation
 
-Recommended next development order (v1.5.0-v1.5.7 implemented):
+Recommended next development order (v1.5.0-v1.5.8 implemented):
 
 1. Phase 2 - UI/UX Modernization (sidebar redesign)
 2. v1.6.1 - Distribution & Release Automation

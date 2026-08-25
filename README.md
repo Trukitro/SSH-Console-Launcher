@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.7  
+**Current version:** 1.5.8  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -178,6 +178,7 @@ UI improvements include:
 Starting with version 1.5.7:
 
 - **Debug Log Viewer** (Tools sidebar section): a live, filterable view over the app's internal logging - `stdout`/`stderr`, the SSH connection lifecycle (spawn, disconnect, timeouts), and otherwise-invisible Tkinter callback exceptions (which the `--windowed` build has no console to print to). Filter by severity (DEBUG/INFO/WARNING/ERROR), copy the visible log, or clear it. Keeps the last 2,000 entries so opening it late still shows recent history, not just what happens after it's opened.
+- **Automatic crash-detail lookup** (v1.5.8): when the app detects a session died unexpectedly, it automatically checks the Windows Application event log for a matching crash (e.g. the `conhost.exe`/ConPTY crash some users have hit) and logs the full detail into the Debug Log Viewer - no manual Event Viewer digging needed.
 
 ---
 
@@ -447,10 +448,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.7
+v1.5.8
 ```
 
-This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, and v1.5.7's Debug Log Viewer and SSH connection lifecycle logging. See `VERSION_HISTORY.md` for details.
+This version includes the modern UI, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, v1.5.7's Debug Log Viewer and SSH connection lifecycle logging, and v1.5.8's automatic crash-detail lookup and a fix for a possible ConPTY crash trigger. See `VERSION_HISTORY.md` for details.
 
 ---
 
