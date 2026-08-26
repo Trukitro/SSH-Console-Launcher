@@ -1,11 +1,11 @@
 # FEATURES_PLAN.md
 
-# SSH Console Launcher - Future Features Plan
+# Embedded SSH Console Launcher - Future Features Plan
 
-**Current stable version:** v1.5.10  
+**Current stable version:** v1.5.11  
 **Planning document created for:** local Git/project tracking
 
-This document tracks future improvements, proposed versions, and implementation ideas for the SSH Console Launcher app.
+This document tracks future improvements, proposed versions, and implementation ideas for the Embedded SSH Console Launcher app.
 
 ---
 
@@ -39,6 +39,7 @@ The app currently supports:
 - Automatic Windows crash-detail lookup, ConPTY crash trigger mitigation (v1.5.8)
 - Full IDE-style redesign: Activity Bar, custom tab strip, header/footer bars, searchable profile cards, categorized command chips, layout diagrams, monitoring progress bars, dockable Debug Console (v1.5.9)
 - Profile edit/delete clarity, password-saved indicator + show/hide toggle, search-filter selection bug fix (v1.5.10)
+- `conhost.exe` crash fix: SSH sessions now spawn on the legacy WinPTY pywinpty backend instead of ConPTY, avoiding the crashing code path by construction (v1.5.11)
 
 ---
 

@@ -12,7 +12,7 @@
 ; why plink.exe works this way; pscp.exe follows the same pattern).
 
 #define MyAppName "SSH Console Launcher"
-#define MyAppVersion "1.5.10"
+#define MyAppVersion "1.5.11"
 #define MyAppPublisher "Ricardo Velez"
 #define MyAppURL "https://github.com/Trukitro/SSH-Console-Launcher"
 #define MyAppExeName "SSH_Console_Launcher.exe"

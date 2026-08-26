@@ -1,4 +1,4 @@
-# SSH Console Launcher - Version History
+# Embedded SSH Console Launcher - Version History
 
 This file tracks the project evolution from the first working concept through the current stable version.
 
@@ -584,10 +584,27 @@ No further crash-detection or spawn-path changes in this release - see the inves
 
 ---
 
+## v1.5.11 - conhost.exe Crash Fix: Switch to the Legacy WinPTY Backend
+
+### Fixed
+
+- **The `conhost.exe`/`ucrtbase.dll` crash (0xc0000409, stack buffer overrun) is now avoided by construction.** The decisive lead came from the user: a plain `ssh user@host` in `cmd.exe` (Windows' built-in OpenSSH client) never crashed, while this app's PTY session crashed reliably. The difference is `pywinpty`'s default backend - **ConPTY**, Windows' native pseudo-console, hosted by a spawned `conhost.exe` process (`CreatePseudoConsole`). `pywinpty` also ships a **legacy WinPTY** backend (`winpty-agent.exe` / `winpty.dll`, both already bundled inside the installed `winpty` package) that never touches `conhost.exe` at all. `EmbeddedTerminal.start_process()`'s `PtyProcess.spawn(...)` call now passes `backend=Backend.WinPTY` (falling back to the previous default automatically if the import fails on some other Python/pywinpty install), which routes every SSH session around the exact code path that was crashing.
+- Verified against the real, previously-100%-reproducing profile and server (not a synthetic reproduction): three consecutive real connections through the actual `EmbeddedTerminal.start_process()` code path (not a standalone script) ran with **zero matching Windows Application-log crash events**, versus a 100% crash rate on the same profile/server under the default ConPTY backend across every prior test in v1.5.8-v1.5.10. One of the three runs ended in a plain disconnect partway through (`crashed=False`, no matching event) - a normal session end, not the crash signature this fix targets.
+
+### Why this is the fix, not another mitigation
+
+Every previous attempt (v1.5.8's `stty rows/columns` removal, various isolation tests in v1.5.10) tried to avoid *triggering* undefined behavior inside Microsoft's ConPTY implementation without being able to fully explain it. Switching backends removes `conhost.exe` from the process tree entirely for this app's SSH sessions, so the specific fault (`Faulting application: conhost.exe`, `Faulting module: ucrtbase.dll`) has no `conhost.exe` process left to occur in.
+
+### Notes
+
+The legacy WinPTY backend is older and less actively maintained upstream than ConPTY, but is a well-established fallback (it's what `pywinpty` used exclusively before ConPTY existed). No behavioral regressions found in testing (ANSI colors, resizing, real command execution, and the full SSH login banner all worked identically to before). If anything backend-specific turns up later (e.g. resize edge cases), it can be revisited.
+
+---
+
 # Current Stable Version
 
 ```text
-v1.5.10
+v1.5.11
 ```
 
 ---

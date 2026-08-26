@@ -76,8 +76,10 @@ except Exception:
 
 try:
     from winpty import PtyProcess
+    from winpty.enums import Backend as _WinptyBackend
 except Exception:
     PtyProcess = None
+    _WinptyBackend = None
 
 try:
     import pyte
@@ -162,7 +164,7 @@ def _install_stdio_tee() -> None:
 _install_stdio_tee()
 
 
-APP_VERSION = "1.5.10"
+APP_VERSION = "1.5.11"
 APP_NAME = f"Embedded SSH Launcher v{APP_VERSION}"
 SERVICE_NAME = "EmbeddedSSHLauncher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "EmbeddedSSHLauncher"
@@ -3230,10 +3232,19 @@ class EmbeddedTerminal(ctk.CTkFrame if ctk is not None else ttk.Frame):
         APP_LOGGER.info(f"Spawning SSH session for {self.profile.name}: {' '.join(redacted_command)}")
 
         try:
-            self.proc = PtyProcess.spawn(
-                command,
-                dimensions=(self.term_columns, self.term_rows),
-            )
+            # backend=WinPTY (legacy winpty-agent.exe, not native ConPTY/conhost.exe):
+            # every crash reported against this app (0xc0000409 stack buffer overrun in
+            # ucrtbase.dll, faulting module conhost.exe) happened on the default ConPTY
+            # backend. Plain `ssh`/plink runs outside this app never crash, and a direct
+            # side-by-side test against the same failing profile/server showed a full
+            # clean session (login banner through shell prompt) on backend=WinPTY with
+            # no matching crash event, vs. a reliable crash on the ConPTY default. Using
+            # the legacy backend sidesteps the conhost.exe code path entirely instead of
+            # patching around undefined behavior inside Microsoft's ConPTY implementation.
+            spawn_kwargs = {"dimensions": (self.term_columns, self.term_rows)}
+            if _WinptyBackend is not None:
+                spawn_kwargs["backend"] = _WinptyBackend.WinPTY
+            self.proc = PtyProcess.spawn(command, **spawn_kwargs)
         except Exception as exc:
             APP_LOGGER.error(f"Failed to spawn SSH session for {self.profile.name}: {exc}")
             self.write_local("ERROR starting terminal:\n" + str(exc) + "\n")

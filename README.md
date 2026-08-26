@@ -1,6 +1,6 @@
 # SSH Console Launcher
 
-**Current version:** 1.5.10  
+**Current version:** 1.5.11  
 **Platform:** Windows 10 / Windows 11  
 **Purpose:** A lightweight Windows GUI for managing multiple SSH console sessions with saved profiles, split panes, tabs, quick commands, auto-login, reconnect controls, and terminal monitoring.
 
@@ -462,10 +462,10 @@ Potential future improvements:
 The current working version is:
 
 ```text
-v1.5.10
+v1.5.11
 ```
 
-This version includes v1.5.10's profile editing/deletion/password-visibility clarity improvements and a search-filter highlight bug fix, v1.5.9's full IDE-style redesign (Activity Bar, redesigned tab strip, header/footer bars, searchable profile cards, categorized Quick Command chips, layout diagrams, monitoring progress bars, dockable Debug Console, and a crashed-session pane state), plus everything from prior versions: the modern UI foundation, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, v1.5.7's Debug Log Viewer and SSH connection lifecycle logging, and v1.5.8's automatic crash-detail lookup and a fix for a possible ConPTY crash trigger. See `VERSION_HISTORY.md` for details.
+This version includes v1.5.11's fix for the `conhost.exe`/`ucrtbase.dll` crash (switched SSH session spawning from the default ConPTY pywinpty backend to the legacy WinPTY backend, which never touches `conhost.exe`), v1.5.10's profile editing/deletion/password-visibility clarity improvements and a search-filter highlight bug fix, v1.5.9's full IDE-style redesign (Activity Bar, redesigned tab strip, header/footer bars, searchable profile cards, categorized Quick Command chips, layout diagrams, monitoring progress bars, dockable Debug Console, and a crashed-session pane state), plus everything from prior versions: the modern UI foundation, quick commands, tab close fixes, terminal colors, connection status indicators, corrected focus behavior, Layout Manager, the Web2py Monitoring Dashboard, the advanced Web Host Monitoring Dashboard upgrade, the v1.4.2 bug-fix and visual-polish pass, v1.5.0's Recent Connections/Environment Tags/SSH Config Import, v1.5.1's Jump Host support and Session Restore, v1.5.2's File Transfer and Broadcast Typing, v1.5.3's Monitoring History/Sparklines and Multi-Server View, v1.5.4's Critical Alerts and Generalized Health Check, v1.5.5's Clipboard Auto-Clear and Connection Audit Log, v1.5.6's window-title version fix and a `pywinpty` upgrade aimed at a reported `conhost.exe` crash, v1.5.7's Debug Log Viewer and SSH connection lifecycle logging, and v1.5.8's automatic crash-detail lookup and a fix for a possible ConPTY crash trigger. See `VERSION_HISTORY.md` for details.
 
 ---
 
