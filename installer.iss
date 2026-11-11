@@ -1,24 +1,21 @@
-; installer.iss
-; Inno Setup script for SSH Console Launcher.
-; Bump AppVersion (and re-tag/re-release) for future versions.
+; installer.iss - Inno Setup script for SSH Console Launcher v2.
 ;
 ; Build sequence:
-;   1. powershell -File build_exe.ps1      -> produces dist\SSH_Console_Launcher.exe
-;   2. ISCC.exe installer.iss              -> produces installer_output\SSH-Console-Launcher-Setup-<version>.exe
+;   1. powershell -File build_exe.ps1      -> produces dist\SSH_Console_Launcher_v2.exe
+;   2. ISCC.exe installer.iss              -> produces installer_output\SSH-Console-Launcher-v2-Setup-<version>.exe
 ;
-; plink.exe and pscp.exe must both be present in this folder before compiling
-; (see README.md / doc/BUILD.md) - they ship as loose sibling files next to
-; the installed exe, not bundled inside it (see the note in build_exe.ps1 for
-; why plink.exe works this way; pscp.exe follows the same pattern).
+; Unlike v1, there is nothing else to bundle - v2 has zero external binary
+; dependencies (paramiko talks SSH directly; the terminal is xterm.js running
+; inside the OS's own WebView2 runtime, which Windows 11 already ships with).
 
-#define MyAppName "SSH Console Launcher"
-#define MyAppVersion "1.5.11"
-#define MyAppPublisher "Ricardo Velez"
+#define MyAppName "SSH Console Launcher v2"
+#define MyAppVersion "2.1.0"
+#define MyAppPublisher "Rikion"
 #define MyAppURL "https://github.com/Trukitro/SSH-Console-Launcher"
-#define MyAppExeName "SSH_Console_Launcher.exe"
+#define MyAppExeName "SSH_Console_Launcher_v2.exe"
 
 [Setup]
-AppId={{B1A5B220-B7F2-433D-B412-F9BCBB2BE6B7}
+AppId={{E3B6B6E2-8B1B-4E33-9C0A-2E8C7B9F4A11}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -31,13 +28,12 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=image\app_icon.ico
-LicenseFile=LICENSE
 WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 OutputDir=installer_output
-OutputBaseFilename=SSH-Console-Launcher-Setup-v{#MyAppVersion}
+OutputBaseFilename=SSH-Console-Launcher-v2-Setup-v{#MyAppVersion}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -46,12 +42,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "dist\SSH_Console_Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "plink.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "pscp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\SSH_Console_Launcher_v2.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "VERSION_HISTORY.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "FEATURES_PLAN.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -1,0 +1,6 @@
+paramiko>=3.4.0
+pywebview>=6.2.0
+keyring>=25.0.0
+pyinstaller>=6.0.0
+pywin32>=306
+psutil>=6.0.0

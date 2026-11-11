@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.so
 .Python
 pythonenv*
 venv/
@@ -19,15 +18,15 @@ dist/
 # Inno Setup output (release artifact, not source - attach to GitHub Releases instead)
 installer_output/
 
-# App generated files / local configs
+# App generated files / local configs (real config lives in %APPDATA%, not the repo)
 profiles.json
 commands.json
 *.log
 logs/
 *.tmp
+dev_test_result.txt
 
-# Local runtime files
-plink.exe
+# Local runtime / secrets
 *.ppk
 *.pem
 *.key
@@ -65,6 +64,3 @@ htmlcov/
 # Do not commit generated executables unless intentionally releasing
 *.exe
 *.msi
-
-# Generated knowledge graph (regenerate locally with graphify)
-graphify-out/

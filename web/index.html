@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>SSH Console Launcher v2</title>
+<link rel="stylesheet" href="vendor/xterm.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <img src="assets/icon.svg" class="brand-icon" alt="" />
+        <span class="brand-text">SSH Console</span>
+        <span id="app-version"></span>
+      </div>
+      <button id="new-connection-btn">+ New connection</button>
+      <input id="profile-search" type="text" placeholder="Search profiles..." autocomplete="off" />
+      <div id="profile-list"></div>
+
+      <div id="commands-header">
+        <span>Quick commands</span>
+        <span class="commands-header-actions">
+          <button id="command-reference-btn" class="icon-btn" title="Command reference / help">?</button>
+          <button id="new-command-btn" class="icon-btn">+</button>
+        </span>
+      </div>
+      <div id="command-list"></div>
+
+      <div id="sidebar-footer">
+        <button id="debug-toggle-btn">Event Log</button>
+        <button id="changelog-toggle-btn">What's changed</button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="tab-strip">
+        <div id="tab-strip-scroll"></div>
+        <button id="broadcast-btn" class="icon-btn" title="Broadcast typing to every pane in this tab">&#8644;</button>
+        <button id="split-btn" class="icon-btn" title="Split active connection into a new pane">&#9633;+</button>
+      </div>
+      <div id="terminal-area"></div>
+      <div id="empty-state">
+        <img src="assets/icon.svg" alt="" />
+        <div id="empty-state-spinner" class="spinner"></div>
+        <p id="empty-state-text">Loading...</p>
+      </div>
+
+      <div id="debug-console" class="hidden">
+        <div id="debug-console-resize-handle"></div>
+        <div id="debug-console-header">
+          <span>Event Log</span>
+          <span class="debug-console-controls">
+            <select id="debug-date-select" title="Day"></select>
+            <select id="debug-level-select" title="Filter">
+              <option value="all">All</option>
+              <option value="error">Errors</option>
+              <option value="warning">Warnings</option>
+              <option value="info">Info</option>
+            </select>
+          </span>
+          <span class="debug-console-actions">
+            <button id="debug-close-btn" class="icon-btn" title="Close">&times;</button>
+          </span>
+        </div>
+        <div id="debug-console-body"></div>
+      </div>
+    </main>
+  </div>
+
+  <div id="changelog-overlay" class="hidden">
+    <div id="changelog-card">
+      <button id="changelog-close-btn" class="icon-btn">&times;</button>
+      <h2>What's changed</h2>
+      <div id="changelog-body"></div>
+    </div>
+  </div>
+
+  <div id="command-overlay" class="hidden">
+    <div id="command-card">
+      <button id="command-close" class="icon-btn">&times;</button>
+      <h2>New quick command</h2>
+      <div class="field">
+        <label>Name</label>
+        <input id="c-name" type="text" placeholder="Disk usage" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Command</label>
+        <input id="c-command" type="text" placeholder="df -h" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Category</label>
+        <input id="c-category" type="text" placeholder="General" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Description (optional)</label>
+        <input id="c-description" type="text" placeholder="What this does and why it's useful" autocomplete="off" />
+      </div>
+      <div class="field field-checkbox">
+        <label for="c-interactive">
+          <input id="c-interactive" type="checkbox" />
+          Full-screen / interactive (htop, less, a shell that asks for a password...)
+        </label>
+      </div>
+      <button class="primary-btn" id="c-save">Save command</button>
+      <p class="error" id="c-error"></p>
+    </div>
+  </div>
+
+  <div id="reference-overlay" class="hidden">
+    <div id="reference-card">
+      <button id="reference-close" class="icon-btn">&times;</button>
+      <h2>Command reference</h2>
+      <p class="reference-subtitle">Common SSH / Web2py / server-admin commands. Click one to run it in the focused pane.</p>
+      <div id="reference-list"></div>
+    </div>
+  </div>
+
+  <div id="wizard-overlay" class="hidden">
+    <div id="wizard-card">
+      <button id="wizard-close" class="icon-btn">&times;</button>
+
+      <div class="wizard-step" data-step="basics">
+        <h2 id="w-basics-title">New connection</h2>
+        <div class="field">
+          <label>Name</label>
+          <input id="w-name" type="text" placeholder="my-server" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>Host</label>
+          <input id="w-host" type="text" placeholder="server.example.com" autocomplete="off" />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Port</label>
+            <input id="w-port" type="text" value="22" autocomplete="off" />
+          </div>
+          <div class="field field-grow">
+            <label>User</label>
+            <input id="w-user" type="text" placeholder="username" autocomplete="off" />
+          </div>
+        </div>
+        <div class="field">
+          <label>Jump host (optional)</label>
+          <select id="w-jump"><option value="">None - connect directly</option></select>
+        </div>
+        <button class="primary-btn" id="w-basics-next">Next</button>
+        <p class="error" id="w-basics-error"></p>
+      </div>
+
+      <div class="wizard-step hidden" data-step="auth">
+        <h2>How should this connect?</h2>
+        <div class="auth-choice" id="w-choose-key">
+          <strong>SSH key (recommended)</strong>
+          <p>The app generates a key pair and installs it on the server. No password stored after setup.</p>
+        </div>
+        <div class="auth-choice" id="w-choose-password">
+          <strong>Password</strong>
+          <p>Saved encrypted in Windows Credential Manager.</p>
+        </div>
+        <button class="ghost-btn" id="w-auth-back">Back</button>
+      </div>
+
+      <div class="wizard-step hidden" data-step="key">
+        <h2>Set up SSH key</h2>
+        <p id="w-key-status">Generating key pair...</p>
+        <div id="w-key-install" class="hidden">
+          <div class="field">
+            <label>Password (used once, not stored)</label>
+            <input id="w-key-password" type="password" autocomplete="off" />
+          </div>
+          <button class="primary-btn" id="w-key-install-btn">Install key &amp; save</button>
+        </div>
+        <p class="error" id="w-key-error"></p>
+        <button class="ghost-btn" id="w-key-back">Back</button>
+      </div>
+
+      <div class="wizard-step hidden" data-step="password">
+        <h2>Password</h2>
+        <div class="field">
+          <label>Password</label>
+          <input id="w-password" type="password" autocomplete="off" />
+        </div>
+        <button class="primary-btn" id="w-password-save">Save connection</button>
+        <p class="error" id="w-password-error"></p>
+        <button class="ghost-btn" id="w-password-back">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="transfer-overlay" class="hidden">
+    <div id="transfer-card">
+      <button id="transfer-close" class="icon-btn">&times;</button>
+      <h2 id="transfer-title">File transfer</h2>
+      <div class="field">
+        <label>Remote path</label>
+        <input id="t-remote-path" type="text" placeholder="/home/user/file.txt" autocomplete="off" />
+      </div>
+      <button class="primary-btn" id="t-upload-btn">Upload a file...</button>
+      <button class="primary-btn" id="t-download-btn">Download to...</button>
+      <p class="error" id="t-error"></p>
+      <p id="t-status"></p>
+    </div>
+  </div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/xterm-addon-fit.js"></script>
+  <script src="ready.js"></script>
+  <script src="wizard.js"></script>
+  <script src="commands.js"></script>
+  <script src="transfer.js"></script>
+  <script src="debug.js"></script>
+  <script src="changelog.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
